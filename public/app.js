@@ -911,22 +911,44 @@
     });
   }
 
-  // Wi-Fi Hotspot QR Generator (Outdoor Mode)
+  // Wi-Fi Hotspot QR Generator (Outdoor / No-Router Mode)
   const btnGenHotspot = document.getElementById('btn-gen-hotspot-qr');
+  const ssidInput = document.getElementById('hotspot-ssid');
+  const passInput = document.getElementById('hotspot-pass');
+
+  // Pre-load saved hotspot credentials from localStorage
+  if (ssidInput && passInput) {
+    try {
+      const savedSSID = localStorage.getItem('omnidrop_hotspot_ssid');
+      const savedPass = localStorage.getItem('omnidrop_hotspot_pass');
+      if (savedSSID) ssidInput.value = savedSSID;
+      if (savedPass) passInput.value = savedPass;
+      if (savedSSID && window.renderQRCodeSVG) {
+        const payload = `WIFI:T:WPA;S:${savedSSID};P:${savedPass || ''};;`;
+        document.getElementById('qr-output-hotspot').innerHTML = window.renderQRCodeSVG(payload, { size: 180 });
+      }
+    } catch (e) {}
+  }
+
   if (btnGenHotspot) {
     btnGenHotspot.addEventListener('click', () => {
-      const ssid = (document.getElementById('hotspot-ssid').value || '').trim();
-      const pass = (document.getElementById('hotspot-pass').value || '').trim();
+      const ssid = (ssidInput ? ssidInput.value : '').trim();
+      const pass = (passInput ? passInput.value : '').trim();
       if (!ssid) {
         showToast('Please enter Hotspot Name (SSID)');
         return;
       }
+      try {
+        localStorage.setItem('omnidrop_hotspot_ssid', ssid);
+        localStorage.setItem('omnidrop_hotspot_pass', pass);
+      } catch (e) {}
+
       // Standard Wi-Fi connection QR payload
       const wifiPayload = `WIFI:T:WPA;S:${ssid};P:${pass};;`;
       if (window.renderQRCodeSVG) {
         document.getElementById('qr-output-hotspot').innerHTML = window.renderQRCodeSVG(wifiPayload, { size: 180 });
       }
-      showToast('Wi-Fi QR Code generated! Scan to join hotspot.');
+      showToast('Wi-Fi QR Code ready! Scan with phone camera to join hotspot.');
     });
   }
 
