@@ -503,6 +503,12 @@ function handleRequest(req, res) {
     pinToDevice.set(hostPin, hostPeerRecord);
     deviceToPin.set(deviceId, hostPin);
 
+    // If client supplied its ID in query, keep its presence alive on the server
+    const clientQueryId = parsedUrl.searchParams.get('clientId');
+    if (clientQueryId && peers.has(clientQueryId)) {
+      peers.get(clientQueryId).lastSeen = Date.now();
+    }
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(Array.from(peers.values())));
     return;
@@ -513,9 +519,10 @@ function handleRequest(req, res) {
   if (req.method === 'POST' && pathname === '/api/register-web-client') {
     parseJsonBody(req).then(data => {
       const clientIp = req.socket.remoteAddress.replace(/^.*:/, '');
-      const clientPin = data.pin || Math.floor(100000 + Math.random() * 900000).toString();
+      const clientId = data.id || ('web_' + crypto.randomBytes(4).toString('hex'));
+      const clientPin = data.pin || deviceToPin.get(clientId) || Math.floor(100000 + Math.random() * 900000).toString();
       const clientPeer = {
-        id: data.id || ('web_' + crypto.randomBytes(4).toString('hex')),
+        id: clientId,
         name: data.name || (data.os ? `${data.os} Web Client` : 'Web Browser'),
         deviceType: data.deviceType || 'phone',
         os: data.os || 'browser',
@@ -526,7 +533,7 @@ function handleRequest(req, res) {
         pin: clientPin
       };
 
-      // Prune any existing stale peer session from this exact same IP address
+      // Prune any existing stale peer session from this exact same IP address (if ID changed)
       for (const [existingId, existingPeer] of peers.entries()) {
         if (existingPeer.isWeb && existingPeer.ip === clientIp && existingId !== clientPeer.id && clientIp !== '127.0.0.1') {
           peers.delete(existingId);
@@ -568,18 +575,19 @@ function handleRequest(req, res) {
 
     req.on('close', () => {
       sseClients.delete(clientQueryId);
-      // Clean up disconnected web peer after a short grace period (4s)
+      // Clean up disconnected web peer only after a generous grace period (30s)
+      // and only if the peer hasn't been seen via heartbeats
       setTimeout(() => {
         if (!sseClients.has(clientQueryId) && peers.has(clientQueryId)) {
           const p = peers.get(clientQueryId);
-          if (p && p.isWeb) {
+          if (p && p.isWeb && (Date.now() - (p.lastSeen || 0) > 25000)) {
             peers.delete(clientQueryId);
             if (p.pin) pinToDevice.delete(p.pin);
             deviceToPin.delete(clientQueryId);
             broadcastSSE('peer_left', { id: clientQueryId });
           }
         }
-      }, 4000);
+      }, 30000);
     });
     return;
   }

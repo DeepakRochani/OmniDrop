@@ -229,6 +229,45 @@
     return Array.from(unique.values());
   }
 
+  // Persistent registration with host (preserves device identity, name and PIN across screen locks)
+  async function registerWithHost() {
+    const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+    if (!isRemoteClient) return;
+
+    try {
+      const { clientOS, clientType } = detectClientDevice();
+      let storedPin = '';
+      try {
+        storedPin = localStorage.getItem('omnidrop_pin') || myInfo.pin || '';
+      } catch (e) {}
+
+      const regRes = await fetch('/api/register-web-client', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: myClientId,
+          name: myInfo.name || `${clientOS.toUpperCase()} Device`,
+          deviceType: myInfo.deviceType || clientType,
+          os: myInfo.os || clientOS,
+          pin: storedPin || undefined
+        })
+      });
+      const regData = await regRes.json();
+      if (regData && regData.pin) {
+        myInfo.pin = regData.pin;
+        try { localStorage.setItem('omnidrop_pin', regData.pin); } catch (e) {}
+        const pinBadge = document.getElementById('self-pin-badge');
+        if (pinBadge) pinBadge.textContent = `PIN: ${regData.pin}`;
+        const modalPin = document.getElementById('modal-my-pin');
+        if (modalPin) modalPin.textContent = regData.pin;
+        const quickCodeEl = document.getElementById('quick-my-code');
+        if (quickCodeEl) quickCodeEl.textContent = regData.pin;
+      }
+    } catch (e) {
+      console.warn('[OmniDrop] Registration ping failed:', e.message);
+    }
+  }
+
   // --- Fetch Self Info & Setup SSE ---
   async function initSelf() {
     try {
@@ -237,7 +276,6 @@
       myInfo = data;
 
       const { clientOS, clientType } = detectClientDevice();
-      // If client browser has different OS than server host, it's a web client accessing remotely
       const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
 
       if (isRemoteClient) {
@@ -246,19 +284,13 @@
         myInfo.deviceType = clientType;
         myInfo.name = `${clientOS.toUpperCase()} Device`;
 
-        // Register with host as a web peer
-        const regRes = await fetch('/api/register-web-client', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: myClientId,
-            name: myInfo.name,
-            deviceType: myInfo.deviceType,
-            os: myInfo.os
-          })
-        });
-        const regData = await regRes.json();
-        if (regData.pin) myInfo.pin = regData.pin;
+        // Restore stored PIN if exists
+        try {
+          const savedPin = localStorage.getItem('omnidrop_pin');
+          if (savedPin) myInfo.pin = savedPin;
+        } catch (e) {}
+
+        await registerWithHost();
       }
 
       document.getElementById('self-name').textContent = myInfo.name;
@@ -296,12 +328,14 @@
 
   // --- Real-time SSE Stream ---
   function connectSSE() {
-    if (eventSource) eventSource.close();
+    if (eventSource) {
+      try { eventSource.close(); } catch (e) {}
+    }
     eventSource = new EventSource('/api/events?clientId=' + encodeURIComponent(myInfo.id || myClientId));
 
     eventSource.addEventListener('peer_joined', e => {
       const peer = JSON.parse(e.data);
-      if (peer.id !== myInfo.id) {
+      if (peer.id !== (myInfo.id || myClientId)) {
         peersMap.set(peer.id, peer);
         renderRadarPeers();
         showToast(`✨ Discovered nearby ${peer.name}`);
@@ -310,7 +344,7 @@
 
     eventSource.addEventListener('peer_updated', e => {
       const peer = JSON.parse(e.data);
-      if (peer.id !== myInfo.id) {
+      if (peer.id !== (myInfo.id || myClientId)) {
         peersMap.set(peer.id, peer);
         renderRadarPeers();
       }
@@ -318,8 +352,10 @@
 
     eventSource.addEventListener('peer_left', e => {
       const data = JSON.parse(e.data);
-      peersMap.delete(data.id);
-      renderRadarPeers();
+      if (peersMap.has(data.id)) {
+        peersMap.delete(data.id);
+        renderRadarPeers();
+      }
     });
 
     // When someone joins our 4G/Cellular Room
@@ -369,96 +405,174 @@
     });
 
     eventSource.onerror = () => {
-      setTimeout(connectSSE, 4000);
+      setTimeout(() => {
+        if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+          connectSSE();
+        }
+      }, 3000);
     };
   }
 
   async function fetchPeers() {
     try {
-      const res = await fetch('/api/peers');
+      const res = await fetch('/api/peers?clientId=' + encodeURIComponent(myInfo.id || myClientId));
       const list = await res.json();
       const currentIds = new Set(list.map(p => p.id));
 
+      let hasChanges = false;
+
       // Remove any peers that left or are no longer active
-      for (const [id, peer] of peersMap.entries()) {
+      for (const [id] of peersMap.entries()) {
         if (!currentIds.has(id)) {
           peersMap.delete(id);
+          hasChanges = true;
         }
       }
 
       for (const peer of list) {
         if (peer.id !== (myInfo.id || myClientId)) {
+          const old = peersMap.get(peer.id);
+          if (!old || old.name !== peer.name || old.ip !== peer.ip || old.pin !== peer.pin) {
+            hasChanges = true;
+          }
           peersMap.set(peer.id, peer);
         }
       }
-      renderRadarPeers();
+
+      // Only re-render when the peer list has ACTUALLY changed! Prevents blinking!
+      if (hasChanges) {
+        renderRadarPeers();
+      }
     } catch (e) {}
   }
 
   // Periodic automatic sync every 2.5 seconds (discovers nearby devices automatically)
   setInterval(fetchPeers, 2500);
 
-  // --- Render Orbiting Radar Peers ---
+  // Background registration heartbeat every 10 seconds to maintain persistent presence
+  setInterval(registerWithHost, 10000);
+
+  // --- Auto-Reconnection & Screen Unlock / Wake-Up Lifecycle ---
+  let isResuming = false;
+  async function handleWakeUpAndResume() {
+    if (isResuming) return;
+    isResuming = true;
+    console.log('[OmniDrop] Screen unlocked / tab resumed. Re-announcing device...');
+
+    try {
+      // 1. Immediately re-announce this device so other devices see us without refresh!
+      await registerWithHost();
+
+      // 2. Re-establish SSE connection if dropped or suspended
+      if (!eventSource || eventSource.readyState === EventSource.CLOSED || eventSource.readyState === EventSource.CONNECTING) {
+        connectSSE();
+      }
+
+      // 3. Immediately fetch peers to update radar without waiting for interval
+      await fetchPeers();
+    } catch (err) {
+      console.warn('[OmniDrop] Wake-up sync error:', err);
+    } finally {
+      setTimeout(() => { isResuming = false; }, 1000);
+    }
+  }
+
+  // Listen to mobile screen unlock, browser focus, pageshow, and online events
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      handleWakeUpAndResume();
+    }
+  });
+  window.addEventListener('focus', handleWakeUpAndResume);
+  window.addEventListener('pageshow', handleWakeUpAndResume);
+  window.addEventListener('online', handleWakeUpAndResume);
+
+  // --- Render Orbiting Radar Peers (Rock-Solid: Zero Blinking, Preserves Nodes) ---
   function renderRadarPeers() {
     const container = document.getElementById('peers-container');
     const hint = document.getElementById('radar-hint');
-    container.innerHTML = '';
-
     const peerList = getActiveUniquePeers();
+
     if (peerList.length === 0) {
-      hint.style.display = 'flex';
+      if (hint) hint.style.display = 'flex';
+      container.innerHTML = '';
       return;
     }
-    hint.style.display = 'none';
+    if (hint) hint.style.display = 'none';
 
     // Position peers in a circle around the center
     const total = peerList.length;
     const radiusPercent = 38; // Distance from center
+    const activeIds = new Set(peerList.map(p => p.id));
 
+    // 1. Remove nodes for peers that are no longer active
+    Array.from(container.children).forEach(child => {
+      if (child.classList.contains('peer-node') && !activeIds.has(child.dataset.id)) {
+        child.remove();
+      }
+    });
+
+    // 2. Insert new nodes or update existing nodes smoothly (NO wiping = NO blinking!)
     peerList.forEach((peer, index) => {
       const angle = (2 * Math.PI / total) * index - (Math.PI / 2);
       const x = 50 + radiusPercent * Math.cos(angle);
       const y = 50 + radiusPercent * Math.sin(angle);
 
-      const node = document.createElement('div');
-      node.className = 'peer-node';
-      node.style.left = `${x}%`;
-      node.style.top = `${y}%`;
-      node.dataset.id = peer.id;
+      let node = container.querySelector(`.peer-node[data-id="${peer.id}"]`);
+      if (node) {
+        // Node already exists: update coordinates and details smoothly without recreation or re-animation!
+        node.style.left = `${x}%`;
+        node.style.top = `${y}%`;
+        const nameEl = node.querySelector('.peer-name');
+        if (nameEl && nameEl.textContent !== peer.name) nameEl.textContent = peer.name;
+        const subEl = node.querySelector('.peer-sub');
+        const expectedSub = peer.ip && peer.ip !== 'undefined' ? peer.ip : (peer.pin ? 'PIN: ' + peer.pin : 'Nearby');
+        if (subEl && subEl.textContent !== expectedSub) subEl.textContent = expectedSub;
+      } else {
+        // Brand new peer: construct node and animate once on entry
+        node = document.createElement('div');
+        node.className = 'peer-node peer-entering';
+        node.style.left = `${x}%`;
+        node.style.top = `${y}%`;
+        node.dataset.id = peer.id;
 
-      node.innerHTML = `
-        <div class="peer-avatar">
-          ${getDeviceIconSvg(peer.os, peer.deviceType)}
-          <span class="peer-badge">${getOsBadge(peer.os)}</span>
-        </div>
-        <span class="peer-name">${peer.name}</span>
-        <span class="peer-sub">${peer.ip && peer.ip !== 'undefined' ? peer.ip : (peer.pin ? 'PIN: ' + peer.pin : 'Nearby')}</span>
-      `;
+        node.innerHTML = `
+          <div class="peer-avatar">
+            ${getDeviceIconSvg(peer.os, peer.deviceType)}
+            <span class="peer-badge">${getOsBadge(peer.os)}</span>
+          </div>
+          <span class="peer-name">${peer.name}</span>
+          <span class="peer-sub">${peer.ip && peer.ip !== 'undefined' ? peer.ip : (peer.pin ? 'PIN: ' + peer.pin : 'Nearby')}</span>
+        `;
 
-      // Click to send files or text
-      node.addEventListener('click', () => {
-        currentTargetPeer = peer;
-        triggerFilePickerForPeer(peer);
-      });
-
-      // Drag and drop onto peer avatar
-      node.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        node.style.transform = 'translate(-50%, -50%) scale(1.25)';
-      });
-      node.addEventListener('dragleave', () => {
-        node.style.transform = 'translate(-50%, -50%) scale(1)';
-      });
-      node.addEventListener('drop', (e) => {
-        e.preventDefault();
-        node.style.transform = 'translate(-50%, -50%) scale(1)';
-        if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+        // Click to send files or text
+        node.addEventListener('click', () => {
           currentTargetPeer = peer;
-          initiateSendFiles(peer, Array.from(e.dataTransfer.files));
-        }
-      });
+          triggerFilePickerForPeer(peer);
+        });
 
-      container.appendChild(node);
+        // Drag and drop onto peer avatar
+        node.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          node.style.transform = 'translate(-50%, -50%) scale(1.25)';
+        });
+        node.addEventListener('dragleave', () => {
+          node.style.transform = 'translate(-50%, -50%) scale(1)';
+        });
+        node.addEventListener('drop', (e) => {
+          e.preventDefault();
+          node.style.transform = 'translate(-50%, -50%) scale(1)';
+          if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+            currentTargetPeer = peer;
+            initiateSendFiles(peer, Array.from(e.dataTransfer.files));
+          }
+        });
+
+        container.appendChild(node);
+        setTimeout(() => {
+          node.classList.remove('peer-entering');
+        }, 500);
+      }
     });
   }
 

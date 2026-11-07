@@ -472,13 +472,15 @@ body {
   flex-direction: column;
   align-items: center;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: left 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), transform 0.2s ease;
   transform: translate(-50%, -50%);
-  animation: pop-in 0.4s ease-out;
 }
 .peer-node:hover {
   transform: translate(-50%, -50%) scale(1.12);
   z-index: 10;
+}
+.peer-node.peer-entering {
+  animation: pop-in 0.4s ease-out;
 }
 
 @keyframes pop-in {
