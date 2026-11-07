@@ -487,6 +487,22 @@ function handleRequest(req, res) {
 
   // --- API: Get Discovered Peers ---
   if (req.method === 'GET' && pathname === '/api/peers') {
+    const net = getNetworkInterfacesInfo();
+    const hostPeerRecord = {
+      id: deviceId,
+      name: deviceName,
+      deviceType: deviceType,
+      os: detectedOS,
+      ip: net.primaryIp,
+      port: server.address() ? server.address().port : DEFAULT_PORT,
+      pin: hostPin,
+      isHost: true,
+      lastSeen: Date.now()
+    };
+    peers.set(deviceId, hostPeerRecord);
+    pinToDevice.set(hostPin, hostPeerRecord);
+    deviceToPin.set(deviceId, hostPin);
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(Array.from(peers.values())));
     return;
@@ -977,6 +993,21 @@ function listen(port) {
     console.log(`📱 Connect Any Phone:   http://${net.primaryIp}:${actualPort}`);
     console.log(`📁 Download Folder:     ${DOWNLOADS_DIR}`);
     console.log('=====================================================');
+
+    const hostPeerRecord = {
+      id: deviceId,
+      name: deviceName,
+      deviceType: deviceType,
+      os: detectedOS,
+      ip: net.primaryIp,
+      port: actualPort,
+      pin: hostPin,
+      isHost: true,
+      lastSeen: Date.now()
+    };
+    peers.set(deviceId, hostPeerRecord);
+    pinToDevice.set(hostPin, hostPeerRecord);
+    deviceToPin.set(deviceId, hostPin);
 
     startDiscovery(actualPort);
   });

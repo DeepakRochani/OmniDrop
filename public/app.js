@@ -377,14 +377,26 @@
     try {
       const res = await fetch('/api/peers');
       const list = await res.json();
+      const currentIds = new Set(list.map(p => p.id));
+
+      // Remove any peers that left or are no longer active
+      for (const [id, peer] of peersMap.entries()) {
+        if (!currentIds.has(id)) {
+          peersMap.delete(id);
+        }
+      }
+
       for (const peer of list) {
-        if (peer.id !== myInfo.id) {
+        if (peer.id !== (myInfo.id || myClientId)) {
           peersMap.set(peer.id, peer);
         }
       }
       renderRadarPeers();
     } catch (e) {}
   }
+
+  // Periodic automatic sync every 2.5 seconds (discovers nearby devices automatically)
+  setInterval(fetchPeers, 2500);
 
   // --- Render Orbiting Radar Peers ---
   function renderRadarPeers() {

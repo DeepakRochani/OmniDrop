@@ -113,3 +113,4 @@ On any Windows 10/11 laptop or desktop:
 | **Send from Android ➔ iPhone** | Open OmniDrop on both phones &rarr; tap iPhone avatar &rarr; Transfer happens at full 100+ MB/s Wi-Fi speed! |
 | **No Wi-Fi? (Mobile Hotspot)** | Turn on Personal Hotspot on one phone &rarr; tap "Connect Device" &rarr; "No Wi-Fi / Hotspot" &rarr; scan QR code &rarr; Connected! |
 | **Direct 6-Digit PIN** | Type the 6-digit code shown on the target phone &rarr; Instant direct connection! |
+
