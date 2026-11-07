@@ -1100,11 +1100,34 @@ body {
    Apple AirDrop Human Interface Guidelines Compliant
    =================================================== */
 
-/* Tablet & iPad (<= 840px) */
-@media (max-width: 840px) {
+/* Tablet & iPad & Resized Windows (<= 900px) */
+@media (max-width: 900px) {
   .app-header {
-    padding: 12px 18px;
-    padding-top: max(12px, env(safe-area-inset-top));
+    padding: 10px 16px;
+    padding-top: max(10px, env(safe-area-inset-top));
+    gap: 10px;
+  }
+  .brand-subtitle {
+    display: none;
+  }
+  .action-label {
+    display: none;
+  }
+  .header-actions {
+    gap: 6px;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+  }
+  .action-btn {
+    padding: 7px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    justify-content: center;
+  }
+  .action-btn svg {
+    width: 18px;
+    height: 18px;
   }
   .radar-wrapper {
     width: min(420px, 86vw);
@@ -1157,9 +1180,15 @@ body {
   .header-actions {
     gap: 6px;
     flex-shrink: 0;
+    flex-wrap: nowrap;
   }
 
   .action-label {
+    display: none;
+  }
+
+  /* On mobile phones, the 6-digit PIN bar is already front-and-center; keep header ultra-clean */
+  #btn-pair-pin {
     display: none;
   }
 
