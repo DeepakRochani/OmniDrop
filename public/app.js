@@ -195,11 +195,31 @@
     }, duration);
   }
 
-  // Persistent client identity per tab/device
-  let myClientId = sessionStorage.getItem('omnidrop_client_id');
+  // Persistent client identity per tab/device (localStorage preserves identity across refreshes)
+  let myClientId = '';
+  try {
+    myClientId = localStorage.getItem('omnidrop_device_id') || sessionStorage.getItem('omnidrop_client_id');
+  } catch (e) {}
   if (!myClientId) {
     myClientId = 'c_' + Math.random().toString(36).substring(2, 9);
+  }
+  try {
+    localStorage.setItem('omnidrop_device_id', myClientId);
     sessionStorage.setItem('omnidrop_client_id', myClientId);
+  } catch (e) {}
+
+  // Get active nearby peers deduplicated by physical device (IP + OS)
+  function getActiveUniquePeers() {
+    const unique = new Map();
+    for (const peer of peersMap.values()) {
+      if (peer.id === myInfo.id || peer.id === myClientId) continue;
+      // Deduplicate by IP address if present, otherwise by ID
+      const key = (peer.ip && peer.ip !== '127.0.0.1' && peer.ip !== 'localhost' && peer.ip !== 'Connected')
+        ? `${peer.ip}_${peer.os || ''}`
+        : peer.id;
+      unique.set(key, peer);
+    }
+    return Array.from(unique.values());
   }
 
   // --- Fetch Self Info & Setup SSE ---
@@ -365,7 +385,7 @@
     const hint = document.getElementById('radar-hint');
     container.innerHTML = '';
 
-    const peerList = Array.from(peersMap.values());
+    const peerList = getActiveUniquePeers();
     if (peerList.length === 0) {
       hint.style.display = 'flex';
       return;
@@ -803,7 +823,7 @@
   const btnSelectFolder = document.getElementById('btn-select-folder');
   if (btnSelectFolder && folderInput) {
     btnSelectFolder.addEventListener('click', () => {
-      const peerList = Array.from(peersMap.values());
+      const peerList = getActiveUniquePeers();
       if (peerList.length === 0) {
         showToast('No nearby devices found. Tap "Connect Phone" to scan QR code!');
         document.getElementById('modal-qr').style.display = 'flex';
@@ -869,7 +889,7 @@
 
   // Global "Select Files" Button -> Shows Target Device Picker
   document.getElementById('btn-select-files').addEventListener('click', () => {
-    const peerList = Array.from(peersMap.values());
+    const peerList = getActiveUniquePeers();
     if (peerList.length === 0) {
       showToast('No nearby devices found. Tap "Connect Phone" to scan QR code!');
       document.getElementById('modal-qr').style.display = 'flex';
@@ -1040,7 +1060,7 @@
 
   // Text Share Button
   document.getElementById('btn-quick-text').addEventListener('click', () => {
-    const peerList = Array.from(peersMap.values());
+    const peerList = getActiveUniquePeers();
     if (peerList.length === 0) {
       showToast('No nearby devices found. Tap "Connect Phone" to scan QR code!');
       return;
@@ -1123,7 +1143,7 @@
     dropzone.style.filter = 'none';
     if (e.dataTransfer && e.dataTransfer.files.length > 0) {
       const files = Array.from(e.dataTransfer.files);
-      const peerList = Array.from(peersMap.values());
+      const peerList = getActiveUniquePeers();
       if (peerList.length === 1) {
         initiateSendFiles(peerList[0], files);
       } else if (peerList.length > 1) {

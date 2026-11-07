@@ -198,9 +198,18 @@ function startDiscovery(httpPort) {
     // Prune stale peers
     const now = Date.now();
     for (const [id, peer] of peers.entries()) {
-      // Don't expire active web browser sessions if they stay connected via SSE
-      if (!peer.isWeb && now - peer.lastSeen > PEER_TIMEOUT_MS) {
+      if (peer.isWeb) {
+        // If web peer has no active SSE connection or has gone silent for 15 seconds, prune it
+        if (!sseClients.has(id) && (now - (peer.lastSeen || 0) > 15000)) {
+          peers.delete(id);
+          if (peer.pin) pinToDevice.delete(peer.pin);
+          deviceToPin.delete(id);
+          broadcastSSE('peer_left', { id });
+        }
+      } else if (now - peer.lastSeen > PEER_TIMEOUT_MS) {
         peers.delete(id);
+        if (peer.pin) pinToDevice.delete(peer.pin);
+        deviceToPin.delete(id);
         broadcastSSE('peer_left', { id });
       }
     }
@@ -424,16 +433,25 @@ function handleRequest(req, res) {
         if (!sender.ip || sender.ip === 'undefined') {
           sender.ip = req.socket.remoteAddress.replace(/^.*:/, '') || 'Connected';
         }
+        sender.isWeb = true;
+        sender.lastSeen = Date.now();
+
+        // Prune any existing stale peer from the same sender IP
+        for (const [existingId, existingPeer] of peers.entries()) {
+          if (existingId !== sender.id && existingPeer.ip === sender.ip && sender.ip !== '127.0.0.1') {
+            peers.delete(existingId);
+            if (existingPeer.pin) pinToDevice.delete(existingPeer.pin);
+            deviceToPin.delete(existingId);
+            broadcastSSE('peer_left', { id: existingId });
+          }
+        }
+
         peers.set(sender.id, sender);
         if (sender.pin) {
           pinToDevice.set(sender.pin, sender);
           deviceToPin.set(sender.id, sender.pin);
         }
-        // Tell target device that this sender paired with them
-        sendSSEToClient(targetPeer.id, 'peer_joined', sender);
-        if (targetPeer.id === deviceId) {
-          broadcastSSE('peer_joined', sender);
-        }
+        broadcastSSE('peer_joined', sender);
       }
 
       peers.set(targetPeer.id, targetPeer);
@@ -491,6 +509,17 @@ function handleRequest(req, res) {
         isWeb: true,
         pin: clientPin
       };
+
+      // Prune any existing stale peer session from this exact same IP address
+      for (const [existingId, existingPeer] of peers.entries()) {
+        if (existingPeer.isWeb && existingPeer.ip === clientIp && existingId !== clientPeer.id && clientIp !== '127.0.0.1') {
+          peers.delete(existingId);
+          if (existingPeer.pin) pinToDevice.delete(existingPeer.pin);
+          deviceToPin.delete(existingId);
+          broadcastSSE('peer_left', { id: existingId });
+        }
+      }
+
       peers.set(clientPeer.id, clientPeer);
       pinToDevice.set(clientPin, clientPeer);
       deviceToPin.set(clientPeer.id, clientPin);
@@ -517,9 +546,24 @@ function handleRequest(req, res) {
     res.write(`event: init\ndata: ${JSON.stringify({ id: deviceId, name: deviceName, os: detectedOS, clientId: clientQueryId })}\n\n`);
 
     sseClients.set(clientQueryId, res);
+    if (peers.has(clientQueryId)) {
+      peers.get(clientQueryId).lastSeen = Date.now();
+    }
 
     req.on('close', () => {
       sseClients.delete(clientQueryId);
+      // Clean up disconnected web peer after a short grace period (4s)
+      setTimeout(() => {
+        if (!sseClients.has(clientQueryId) && peers.has(clientQueryId)) {
+          const p = peers.get(clientQueryId);
+          if (p && p.isWeb) {
+            peers.delete(clientQueryId);
+            if (p.pin) pinToDevice.delete(p.pin);
+            deviceToPin.delete(clientQueryId);
+            broadcastSSE('peer_left', { id: clientQueryId });
+          }
+        }
+      }, 4000);
     });
     return;
   }
