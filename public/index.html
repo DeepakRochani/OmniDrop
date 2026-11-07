@@ -35,21 +35,21 @@
     <div class="header-actions">
       <div class="e2ee-indicator glass" title="Direct Peer-to-Peer Transfer (No Cloud)">
         <span class="e2ee-dot"></span>
-        <span>Local P2P</span>
+        <span class="action-label">Local P2P</span>
       </div>
 
       <button id="btn-pair-pin" class="action-btn glass" title="Direct 6-Digit PIN Connect">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
         </svg>
-        <span>Enter 6-Digit PIN</span>
+        <span class="action-label">Enter PIN</span>
       </button>
 
       <button id="btn-show-qr" class="action-btn glass" title="Connect Phone or Tablet">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM14 14h3v3h-3zM18 18h3v3h-3zM18 14h3v1h-3zM14 18h1v3h-1z" />
         </svg>
-        <span>Connect Phone</span>
+        <span class="action-label">Connect</span>
       </button>
 
       <button id="btn-history" class="action-btn glass" title="Recent Transfers">
@@ -78,7 +78,7 @@
       </div>
       <div class="code-divider"></div>
       <div class="code-input-wrap">
-        <input type="tel" id="direct-code-input" maxlength="6" placeholder="Type 6-digit code of other device..." autocomplete="off" />
+        <input type="tel" id="direct-code-input" maxlength="6" placeholder="Enter 6-digit code..." autocomplete="off" />
         <button id="btn-direct-connect-go" class="code-go-btn">Connect</button>
       </div>
     </div>

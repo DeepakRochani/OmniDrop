@@ -1036,3 +1036,303 @@ body {
   border-color: var(--accent-cyan);
 }
 
+/* ===================================================
+   RESPONSIVE LAYOUT ENGINE (Mobile, Tablet, Desktop)
+   Apple AirDrop Human Interface Guidelines Compliant
+   =================================================== */
+
+/* Tablet & iPad (<= 840px) */
+@media (max-width: 840px) {
+  .app-header {
+    padding: 12px 18px;
+    padding-top: max(12px, env(safe-area-inset-top));
+  }
+  .radar-wrapper {
+    width: min(420px, 86vw);
+    height: min(420px, 86vw);
+  }
+  .direct-code-bar {
+    max-width: 480px;
+  }
+}
+
+/* Mobile Devices & Phones (<= 640px) */
+@media (max-width: 640px) {
+  body {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .app-header {
+    padding: 8px 12px;
+    padding-top: max(8px, env(safe-area-inset-top));
+    gap: 8px;
+  }
+
+  .brand {
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .brand-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
+
+  .brand-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .brand-title {
+    font-size: 16px;
+    line-height: 1.1;
+  }
+
+  .brand-subtitle {
+    display: none;
+  }
+
+  .header-actions {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .action-label {
+    display: none;
+  }
+
+  .action-btn {
+    padding: 7px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    justify-content: center;
+  }
+
+  .action-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .e2ee-indicator {
+    padding: 6px 8px;
+    border-radius: 16px;
+  }
+
+  .main-container {
+    padding: 6px 12px;
+    justify-content: space-between;
+    height: calc(100dvh - 56px);
+  }
+
+  /* Direct Code Bar Mobile */
+  .direct-code-bar {
+    padding: 6px 12px;
+    gap: 8px;
+    border-radius: 20px;
+    margin-bottom: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  }
+
+  .code-pill {
+    padding-right: 4px;
+  }
+
+  .code-label {
+    font-size: 8px;
+    letter-spacing: 0.5px;
+  }
+
+  .code-number {
+    font-size: 14px;
+    letter-spacing: 1.5px;
+  }
+
+  .code-divider {
+    height: 22px;
+  }
+
+  .code-input-wrap {
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .code-input-wrap input {
+    min-width: 0;
+    padding: 6px 10px;
+    font-size: 12px;
+    letter-spacing: 1px;
+    border-radius: 14px;
+  }
+
+  .code-input-wrap input::placeholder {
+    font-size: 11px;
+    letter-spacing: 0;
+  }
+
+  .code-go-btn {
+    padding: 6px 12px;
+    font-size: 12px;
+    border-radius: 14px;
+  }
+
+  /* Radar Mobile */
+  .radar-wrapper {
+    width: min(320px, 86vw);
+    height: min(320px, 86vw);
+    margin: auto 0;
+  }
+
+  .node-avatar {
+    width: 68px;
+    height: 68px;
+  }
+
+  .self-avatar svg {
+    width: 34px;
+    height: 34px;
+  }
+
+  .node-info {
+    max-width: 120px;
+    margin-top: 6px;
+  }
+
+  .node-name {
+    font-size: 13px;
+  }
+
+  .node-status {
+    font-size: 10px;
+  }
+
+  .self-pin {
+    font-size: 10px;
+    padding: 1px 6px;
+  }
+
+  .peer-avatar {
+    width: 54px;
+    height: 54px;
+  }
+
+  .peer-avatar svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .peer-badge {
+    width: 20px;
+    height: 20px;
+    font-size: 9px;
+    bottom: -2px;
+    right: -2px;
+  }
+
+  .peer-name {
+    font-size: 11px;
+    max-width: 80px;
+    margin-top: 4px;
+  }
+
+  .peer-sub {
+    font-size: 9px;
+  }
+
+  .radar-hint {
+    bottom: 0px;
+  }
+
+  .radar-hint p {
+    font-size: 12px;
+  }
+
+  .hint-sub {
+    font-size: 10px;
+    max-width: 260px;
+  }
+
+  /* Bottom Action Bar Mobile */
+  .bottom-bar {
+    margin-top: auto;
+    padding-bottom: max(12px, env(safe-area-inset-bottom, 14px));
+    max-width: 100%;
+  }
+
+  .quick-file-selector {
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 20px;
+  }
+
+  .primary-btn {
+    padding: 11px 16px;
+    font-size: 13px;
+    border-radius: 16px;
+  }
+
+  .secondary-btn {
+    padding: 11px 14px;
+    font-size: 13px;
+    border-radius: 16px;
+  }
+
+  /* Modals on Mobile */
+  .modal-card {
+    width: 92vw;
+    max-width: 380px;
+    padding: 20px 16px;
+    border-radius: 20px;
+  }
+
+  .pin-big-input {
+    font-size: 26px !important;
+    letter-spacing: 6px !important;
+    padding: 10px 14px !important;
+    max-width: 220px;
+  }
+}
+
+/* Extra Small Phones (<= 380px e.g. iPhone SE) */
+@media (max-width: 380px) {
+  .app-header {
+    padding: 6px 8px;
+  }
+
+  .e2ee-indicator {
+    display: none;
+  }
+
+  .brand-title {
+    font-size: 15px;
+  }
+
+  .radar-wrapper {
+    width: 270px;
+    height: 270px;
+  }
+
+  .node-avatar {
+    width: 58px;
+    height: 58px;
+  }
+
+  .self-avatar svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .quick-file-selector {
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .primary-btn, .secondary-btn {
+    padding: 9px 10px;
+    font-size: 12px;
+  }
+}
+
