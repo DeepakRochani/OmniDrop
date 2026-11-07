@@ -1,0 +1,21 @@
+{
+  "name": "omni-airdrop",
+  "version": "1.0.0",
+  "description": "Universal Cross-Platform AirDrop for Android, iOS, Windows, Mac, Linux, and Tablets",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "airdrop",
+    "file-transfer",
+    "p2p",
+    "android",
+    "ios",
+    "cross-platform",
+    "local-network"
+  ],
+  "author": "Antigravity",
+  "license": "MIT"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "OmniDrop",
+  "short_name": "OmniDrop",
+  "description": "Universal Cross-Platform AirDrop for Android, iOS, Windows, Mac, and Tablets",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e17",
+  "theme_color": "#0a0e17",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

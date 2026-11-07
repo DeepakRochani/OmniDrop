@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0b0f19" />
+  <title>OmniDrop - Universal AirDrop</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2338bdf8'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-5H8l4-4 4 4h-3v5h-2z'/></svg>" />
+</head>
+<body>
+  <!-- Ambient background glow -->
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 20.5a8.5 8.5 0 100-17 8.5 8.5 0 000 17z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 16a4 4 0 100-8 4 4 0 000 8z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 12.5a.5.5 0 100-1 .5.5 0 000 1z" />
+        </svg>
+      </div>
+      <div>
+        <h1 class="brand-title">OmniDrop</h1>
+        <p class="brand-subtitle">Universal Cross-Platform AirDrop</p>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <button id="btn-show-qr" class="action-btn glass" title="Connect Phone or Tablet">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM14 14h3v3h-3zM18 18h3v3h-3zM18 14h3v1h-3zM14 18h1v3h-1z" />
+        </svg>
+        <span>Connect Phone</span>
+      </button>
+
+      <button id="btn-history" class="action-btn glass" title="Recent Transfers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span class="badge" id="history-badge" style="display:none;">0</span>
+      </button>
+
+      <button id="btn-settings" class="action-btn glass" title="Device Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Radar Stage -->
+  <main class="main-container">
+    <div class="radar-wrapper" id="radar-dropzone">
+      <!-- Sonar Waves -->
+      <div class="radar-ring ring-1"></div>
+      <div class="radar-ring ring-2"></div>
+      <div class="radar-ring ring-3"></div>
+      <div class="radar-scan"></div>
+
+      <!-- Self Node (Center of the Universe) -->
+      <div class="node-self" id="self-node">
+        <div class="node-avatar self-avatar" id="self-avatar-icon">
+          <!-- OS icon dynamically injected -->
+        </div>
+        <div class="node-info">
+          <span class="node-name" id="self-name">This Device</span>
+          <span class="node-status">Discoverable to all nearby</span>
+        </div>
+      </div>
+
+      <!-- Nearby Peers Orbit Container -->
+      <div class="peers-orbit" id="peers-container">
+        <!-- Discovered devices injected dynamically here -->
+      </div>
+
+      <!-- Empty state hint when no devices are visible -->
+      <div class="radar-hint" id="radar-hint">
+        <div class="hint-pulse"></div>
+        <p>Looking for nearby devices...</p>
+        <span class="hint-sub">Make sure other phones, PCs or iPads are on the same Wi-Fi or scan the QR code</span>
+      </div>
+    </div>
+
+    <!-- Quick Drop Bar / Action Bar -->
+    <div class="bottom-bar">
+      <div class="quick-file-selector glass">
+        <input type="file" id="global-file-input" multiple style="display: none;" />
+        <button class="primary-btn" id="btn-select-files">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          <span>Select Files or Photos</span>
+        </button>
+
+        <button class="secondary-btn glass" id="btn-quick-text" title="Share text or link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+          <span>Share Text</span>
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <!-- MODAL: QR Code Connect -->
+  <div class="modal-backdrop" id="modal-qr" style="display:none;">
+    <div class="modal-card glass">
+      <div class="modal-header">
+        <h3>Connect Phone or Tablet</h3>
+        <button class="modal-close" id="btn-close-qr">&times;</button>
+      </div>
+      <div class="modal-body text-center">
+        <p class="modal-desc">Point your iPhone, iPad, or Android camera at this QR code to join without installing an app:</p>
+        <div class="qr-canvas-container" id="qr-output">
+          <!-- SVG QR Code rendered here -->
+        </div>
+        <div class="qr-url-box">
+          <span id="qr-url-text">http://192.168.1.33:53317</span>
+          <button class="copy-btn" id="btn-copy-url">Copy</button>
+        </div>
+        <p class="qr-tip">💡 No app required! Works in Safari, Chrome, Edge, and all mobile browsers.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Incoming Transfer Request (AirDrop style) -->
+  <div class="modal-backdrop" id="modal-incoming" style="display:none;">
+    <div class="modal-card incoming-card glass">
+      <div class="incoming-pulse">
+        <div class="pulse-icon" id="incoming-sender-icon">
+          📱
+        </div>
+      </div>
+      <h3 id="incoming-sender-title">iPhone wants to share with you</h3>
+      <div class="incoming-file-summary" id="incoming-files-info">
+        <span class="file-count">3 Files</span> &bull; <span class="file-size">42.5 MB</span>
+      </div>
+      <div class="incoming-preview-list" id="incoming-file-items">
+        <!-- File list rendered here -->
+      </div>
+      <div class="incoming-actions">
+        <button class="btn-decline" id="btn-incoming-decline">Decline</button>
+        <button class="btn-accept" id="btn-incoming-accept">Accept</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Active Transfer Progress -->
+  <div class="modal-backdrop" id="modal-progress" style="display:none;">
+    <div class="modal-card glass text-center">
+      <h3 id="progress-title">Transferring Files...</h3>
+      <p class="progress-sub" id="progress-target">Sending to Galaxy S24</p>
+      
+      <div class="progress-gauge-container">
+        <svg class="progress-ring" viewBox="0 0 120 120">
+          <circle class="ring-bg" cx="60" cy="60" r="50"></circle>
+          <circle class="ring-fill" id="progress-ring-fill" cx="60" cy="60" r="50"></circle>
+        </svg>
+        <div class="progress-value" id="progress-percentage">0%</div>
+      </div>
+
+      <div class="progress-stats">
+        <div class="stat-item">
+          <span class="stat-label">Speed</span>
+          <span class="stat-val" id="progress-speed">-- MB/s</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">File</span>
+          <span class="stat-val" id="progress-filename">Preparing...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Instant Text Share -->
+  <div class="modal-backdrop" id="modal-text" style="display:none;">
+    <div class="modal-card glass">
+      <div class="modal-header">
+        <h3>Share Text or Link</h3>
+        <button class="modal-close" id="btn-close-text">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Send text directly to clipboard of nearby device:</p>
+        <textarea id="text-share-input" class="glass-input" rows="4" placeholder="Paste link, message, code snippet, or address..."></textarea>
+        <div class="target-peer-select">
+          <label>Recipient:</label>
+          <select id="text-target-select" class="glass-select"></select>
+        </div>
+        <button class="primary-btn full-width" id="btn-send-text-action">Send to Device</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DRAWER: History & Received Files -->
+  <div class="drawer-backdrop" id="drawer-history" style="display:none;">
+    <div class="drawer-panel glass">
+      <div class="drawer-header">
+        <h3>Received Files</h3>
+        <div class="drawer-header-actions">
+          <button class="small-btn glass" id="btn-open-folder">Open Folder</button>
+          <button class="modal-close" id="btn-close-history">&times;</button>
+        </div>
+      </div>
+      <div class="drawer-body" id="history-list">
+        <div class="empty-history">No files received yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST NOTIFICATION CONTAINER -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Target device picker action sheet (When user clicks Select Files) -->
+  <div class="modal-backdrop" id="modal-target-picker" style="display:none;">
+    <div class="modal-card glass">
+      <div class="modal-header">
+        <h3>Choose Recipient</h3>
+        <button class="modal-close" id="btn-close-picker">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Select which nearby device to send to:</p>
+        <div class="picker-device-list" id="picker-list">
+          <!-- Injected dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/qrcode.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
