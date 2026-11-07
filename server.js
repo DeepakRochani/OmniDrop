@@ -232,6 +232,12 @@ process.on('SIGTERM', () => {
   sendGoodbye();
   process.exit(0);
 });
+process.on('uncaughtException', err => {
+  console.error('[OmniDrop Warning - Recovered]:', err.message);
+});
+process.on('unhandledRejection', reason => {
+  console.error('[OmniDrop Warning - Promise Rejection]:', reason);
+});
 
 // --- HTTP Server & Static Assets ---
 const MIME_TYPES = {
@@ -861,28 +867,37 @@ function handleRequest(req, res) {
 
   // --- API: Direct Download a Received File ---
   if (req.method === 'GET' && pathname.startsWith('/api/download/')) {
-    const filename = decodeURIComponent(pathname.replace('/api/download/', ''));
-    const safePath = path.join(DOWNLOADS_DIR, path.basename(filename));
+    try {
+      const filename = decodeURIComponent(pathname.replace('/api/download/', ''));
+      const safePath = path.join(DOWNLOADS_DIR, path.basename(filename));
 
-    if (!fs.existsSync(safePath)) {
-      res.writeHead(404);
-      res.end('File not found');
-      return;
+      if (!fs.existsSync(safePath)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('File not found');
+        return;
+      }
+
+      const stat = fs.statSync(safePath);
+      const ext = path.extname(safePath).toLowerCase();
+      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+      const cleanBaseName = path.basename(safePath);
+      const asciiFallback = cleanBaseName.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_') || 'download';
+      const encodedName = encodeURIComponent(cleanBaseName);
+
+      res.writeHead(200, {
+        'Content-Disposition': `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodedName}`,
+        'Content-Type': contentType,
+        'Content-Length': stat.size,
+        'Cache-Control': 'no-cache'
+      });
+      fs.createReadStream(safePath).pipe(res);
+    } catch (err) {
+      console.error('[Download error]:', err.message);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Download error');
+      }
     }
-
-    const stat = fs.statSync(safePath);
-    const ext = path.extname(safePath).toLowerCase();
-    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    const cleanBaseName = path.basename(safePath);
-    const encodedName = encodeURIComponent(cleanBaseName);
-
-    res.writeHead(200, {
-      'Content-Disposition': `attachment; filename="${cleanBaseName}"; filename*=UTF-8''${encodedName}`,
-      'Content-Type': contentType,
-      'Content-Length': stat.size,
-      'Cache-Control': 'no-cache'
-    });
-    fs.createReadStream(safePath).pipe(res);
     return;
   }
 
