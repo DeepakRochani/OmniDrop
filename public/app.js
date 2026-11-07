@@ -738,8 +738,6 @@
         triggerAutoDownload(url, name);
       }, index * 300);
     });
-
-    updateHistoryBadge();
   }
 
   function onTransferComplete(comp) {
@@ -763,48 +761,21 @@
     }
   }
 
-  // --- Recent Received History Drawer ---
-  async function loadReceivedHistory() {
-    try {
-      const res = await fetch('/api/received');
-      const list = await res.json();
-      const container = document.getElementById('history-list');
-
-      if (!list || list.length === 0) {
-        container.innerHTML = '<div class="empty-history" style="text-align:center;color:var(--text-muted);padding:30px;">No files received yet.</div>';
-        return;
-      }
-
-      container.innerHTML = list.map(item => `
-        <div class="history-item">
-          <div>
-            <div class="history-title" title="${item.name}">${item.name}</div>
-            <div class="history-sub">${item.formattedSize} &bull; from ${item.sender} &bull; <span style="color:#10b981;font-weight:600;">Saved</span></div>
-          </div>
-          <a href="/api/download/${encodeURIComponent(item.name)}" download class="history-action-btn" title="Download another copy">Download</a>
-        </div>
-      `).join('');
-    } catch (e) {}
-  }
-
-  async function updateHistoryBadge() {
-    try {
-      const res = await fetch('/api/received');
-      const list = await res.json();
-      const badge = document.getElementById('history-badge');
-      if (list && list.length > 0) {
-        badge.textContent = list.length;
-        badge.style.display = 'flex';
-      }
-    } catch (e) {}
-  }
-
-  // --- Universal Modal Backdrop Dismiss & Close Button Handlers ---
+  // --- Universal Instant Modal Dismiss & Touch Handlers ---
   function setupDismissableModal(modalId, closeBtnId, onDismiss) {
     const modal = document.getElementById(modalId);
     if (!modal) return;
 
-    const doDismiss = () => {
+    let isDismissing = false;
+    const doDismiss = (e) => {
+      if (e) {
+        try { e.preventDefault(); } catch (err) {}
+        try { e.stopPropagation(); } catch (err) {}
+      }
+      if (isDismissing) return;
+      isDismissing = true;
+      setTimeout(() => { isDismissing = false; }, 300);
+
       if (onDismiss) {
         onDismiss();
       } else {
@@ -812,33 +783,39 @@
       }
     };
 
-    // Close button click with touch-safe handling
+    // Close button: listen to pointerdown (0ms instant touch), touchstart, and click
     if (closeBtnId) {
       const btn = document.getElementById(closeBtnId);
       if (btn) {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          doDismiss();
-        });
+        btn.addEventListener('pointerdown', doDismiss, { passive: false });
+        btn.addEventListener('touchstart', doDismiss, { passive: false });
+        btn.addEventListener('click', doDismiss);
       }
     }
 
-    // Tap or click anywhere outside the card on the backdrop to dismiss immediately
+    // Tap anywhere on the backdrop outside the card to dismiss immediately
+    modal.addEventListener('pointerdown', (e) => {
+      if (!e.target.closest('.modal-card')) {
+        doDismiss(e);
+      }
+    }, { passive: false });
+    modal.addEventListener('touchstart', (e) => {
+      if (!e.target.closest('.modal-card')) {
+        doDismiss(e);
+      }
+    }, { passive: false });
     modal.addEventListener('click', (e) => {
-      if (!e.target.closest('.modal-card') && !e.target.closest('.drawer-panel')) {
-        e.stopPropagation();
-        doDismiss();
+      if (!e.target.closest('.modal-card')) {
+        doDismiss(e);
       }
     });
   }
 
-  // Register all modals for effortless dismissal
+  // Register all modals for instant dismissal
   setupDismissableModal('modal-qr', 'btn-close-qr');
   setupDismissableModal('modal-pin-pair', 'btn-close-pin');
   setupDismissableModal('modal-text', 'btn-close-text');
   setupDismissableModal('modal-target-picker', 'btn-close-picker');
-  setupDismissableModal('drawer-history', 'btn-close-history');
   setupDismissableModal('modal-file-ready', 'btn-close-file-ready');
   setupDismissableModal('modal-progress', 'btn-close-progress');
   setupDismissableModal('modal-incoming', 'btn-close-incoming', () => {
@@ -849,7 +826,7 @@
   // Global Escape key dismiss for physical keyboards (Mac/PC/iPad)
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      ['modal-qr', 'modal-pin-pair', 'modal-text', 'modal-target-picker', 'drawer-history', 'modal-file-ready', 'modal-progress'].forEach(id => {
+      ['modal-qr', 'modal-pin-pair', 'modal-text', 'modal-target-picker', 'modal-file-ready', 'modal-progress'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.style.display !== 'none') el.style.display = 'none';
       });
@@ -870,15 +847,6 @@
     const text = document.getElementById('qr-url-text').textContent;
     navigator.clipboard?.writeText(text);
     showToast('Copied link to clipboard!');
-  });
-
-  document.getElementById('btn-history').addEventListener('click', () => {
-    loadReceivedHistory();
-    document.getElementById('drawer-history').style.display = 'flex';
-  });
-
-  document.getElementById('btn-open-folder').addEventListener('click', () => {
-    fetch('/api/open-downloads', { method: 'POST' });
   });
 
   // Folder Selection Handler

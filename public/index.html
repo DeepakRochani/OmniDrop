@@ -54,12 +54,6 @@
         <span class="action-label">Connect</span>
       </button>
 
-      <button id="btn-history" class="action-btn glass" title="Recent Transfers">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <span class="badge" id="history-badge" style="display:none;">0</span>
-      </button>
 
       <button id="btn-settings" class="action-btn glass" title="Device Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -315,23 +309,6 @@
     </div>
   </div>
 
-  <!-- DRAWER: History & Received Files -->
-  <div class="drawer-backdrop" id="drawer-history" style="display:none;">
-    <div class="drawer-panel glass">
-      <div class="drawer-header">
-        <h3>Received Files</h3>
-        <div class="drawer-header-actions">
-          <button class="small-btn glass" id="btn-open-folder">Open Folder</button>
-          <button class="modal-close" id="btn-close-history" aria-label="Close">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
-        </div>
-      </div>
-      <div class="drawer-body" id="history-list">
-        <div class="empty-history">No files received yet.</div>
-      </div>
-    </div>
-  </div>
 
   <!-- TOAST NOTIFICATION CONTAINER -->
   <div class="toast-container" id="toast-container"></div>
