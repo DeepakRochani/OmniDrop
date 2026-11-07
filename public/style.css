@@ -224,6 +224,93 @@ body {
   justify-content: center;
 }
 
+/* Direct 6-Digit Fast Connect Bar */
+.direct-code-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-radius: 30px;
+  margin-bottom: 16px;
+  max-width: 520px;
+  width: 100%;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  z-index: 10;
+}
+
+.code-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-right: 6px;
+}
+.code-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+.code-number {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--accent-cyan);
+  letter-spacing: 2px;
+  font-family: monospace, -apple-system;
+}
+
+.code-divider {
+  width: 1px;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.code-input-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.code-input-wrap input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 8px 14px;
+  color: white;
+  font-size: 13px;
+  letter-spacing: 2px;
+  font-weight: 600;
+  outline: none;
+  transition: all 0.2s;
+}
+.code-input-wrap input:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+}
+.code-input-wrap input::placeholder {
+  letter-spacing: 0;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.code-go-btn {
+  background: linear-gradient(135deg, #0284c7, #2563eb);
+  color: white;
+  border: none;
+  border-radius: 18px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.code-go-btn:hover {
+  filter: brightness(1.1);
+}
+
 /* Sonar Radar Section */
 .radar-wrapper {
   position: relative;
@@ -342,6 +429,31 @@ body {
   display: block;
   font-size: 11px;
   color: var(--accent-cyan);
+}
+
+.self-pin {
+  display: inline-block;
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: var(--accent-cyan);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  margin: 3px 0;
+}
+
+.pin-big-input {
+  font-size: 32px !important;
+  font-weight: 800 !important;
+  letter-spacing: 8px !important;
+  text-align: center !important;
+  color: var(--accent-cyan) !important;
+  padding: 14px 20px !important;
+  max-width: 260px;
+  margin: 0 auto !important;
+  display: block;
 }
 
 /* Orbiting Peers Container */

@@ -54,6 +54,11 @@ const activeTransfers = new Map(); // transferId -> { id, sender, targetId, file
 const receivedFilesHistory = [];
 const rooms = new Map(); // roomCode -> Set of { id, name, os, deviceType }
 
+// Direct 6-Digit PIN Pairing Registry
+let hostPin = Math.floor(100000 + Math.random() * 900000).toString();
+const pinToDevice = new Map(); // pin -> peerRecord
+const deviceToPin = new Map(); // id -> pin
+
 // Helper: Get local IP addresses and broadcast addresses
 function getNetworkInterfacesInfo() {
   const interfaces = os.networkInterfaces();
@@ -333,6 +338,19 @@ function handleRequest(req, res) {
   // --- API: Get Self Info ---
   if (req.method === 'GET' && pathname === '/api/me') {
     const net = getNetworkInterfacesInfo();
+    const hostPeerRecord = {
+      id: deviceId,
+      name: deviceName,
+      deviceType: deviceType,
+      os: detectedOS,
+      ip: net.primaryIp,
+      port: server.address() ? server.address().port : DEFAULT_PORT,
+      pin: hostPin,
+      isHost: true
+    };
+    pinToDevice.set(hostPin, hostPeerRecord);
+    deviceToPin.set(deviceId, hostPin);
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       id: deviceId,
@@ -343,8 +361,54 @@ function handleRequest(req, res) {
       allIps: net.allIps,
       port: server.address() ? server.address().port : DEFAULT_PORT,
       downloadsDir: DOWNLOADS_DIR,
-      protocol: PROTOCOL_TAG
+      protocol: PROTOCOL_TAG,
+      pin: hostPin
     }));
+    return;
+  }
+
+  // --- API: Pair By 6-Digit PIN (Direct AirDrop Pairing) ---
+  if (req.method === 'POST' && pathname === '/api/pair-by-pin') {
+    parseJsonBody(req).then(data => {
+      const pin = (data.pin || '').toString().trim().replace(/\D/g, '');
+      const sender = data.sender;
+
+      const targetPeer = pinToDevice.get(pin);
+      if (!targetPeer) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `No device found with PIN ${pin}. Make sure the other screen is open.` }));
+        return;
+      }
+
+      if (sender && sender.id === targetPeer.id) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "That's this device's own PIN!" }));
+        return;
+      }
+
+      // Add both to peers
+      if (sender) {
+        peers.set(sender.id, sender);
+        if (sender.pin) {
+          pinToDevice.set(sender.pin, sender);
+          deviceToPin.set(sender.id, sender.pin);
+        }
+        // Tell target device that this sender paired with them
+        sendSSEToClient(targetPeer.id, 'peer_joined', sender);
+        if (targetPeer.id === deviceId) {
+          broadcastSSE('peer_joined', sender);
+        }
+      }
+
+      peers.set(targetPeer.id, targetPeer);
+      broadcastSSE('peer_joined', targetPeer);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, peer: targetPeer }));
+    }).catch(err => {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: err.message }));
+    });
     return;
   }
 
@@ -379,6 +443,7 @@ function handleRequest(req, res) {
   if (req.method === 'POST' && pathname === '/api/register-web-client') {
     parseJsonBody(req).then(data => {
       const clientIp = req.socket.remoteAddress.replace(/^.*:/, '');
+      const clientPin = data.pin || Math.floor(100000 + Math.random() * 900000).toString();
       const clientPeer = {
         id: data.id || ('web_' + crypto.randomBytes(4).toString('hex')),
         name: data.name || (data.os ? `${data.os} Web Client` : 'Web Browser'),
@@ -387,13 +452,17 @@ function handleRequest(req, res) {
         ip: clientIp,
         port: server.address().port,
         lastSeen: Date.now(),
-        isWeb: true
+        isWeb: true,
+        pin: clientPin
       };
       peers.set(clientPeer.id, clientPeer);
+      pinToDevice.set(clientPin, clientPeer);
+      deviceToPin.set(clientPeer.id, clientPin);
+
       broadcastSSE('peer_joined', clientPeer);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, peer: clientPeer }));
+      res.end(JSON.stringify({ ok: true, peer: clientPeer, pin: clientPin }));
     }).catch(err => {
       res.writeHead(400);
       res.end(JSON.stringify({ error: err.message }));

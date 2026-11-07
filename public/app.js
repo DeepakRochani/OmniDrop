@@ -218,7 +218,7 @@
         myInfo.name = `${clientOS.toUpperCase()} Device`;
 
         // Register with host as a web peer
-        await fetch('/api/register-web-client', {
+        const regRes = await fetch('/api/register-web-client', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -228,13 +228,21 @@
             os: myInfo.os
           })
         });
+        const regData = await regRes.json();
+        if (regData.pin) myInfo.pin = regData.pin;
       }
 
       document.getElementById('self-name').textContent = myInfo.name;
       document.getElementById('self-avatar-icon').innerHTML = getDeviceIconSvg(myInfo.os, myInfo.deviceType);
+      if (myInfo.pin) {
+        document.getElementById('self-pin-badge').textContent = `PIN: ${myInfo.pin}`;
+        document.getElementById('modal-my-pin').textContent = myInfo.pin;
+        const quickCodeEl = document.getElementById('quick-my-code');
+        if (quickCodeEl) quickCodeEl.textContent = myInfo.pin;
+      }
 
-      // Render QR code for other devices to scan
-      const hostUrl = `http://${myInfo.ip}:${myInfo.port}`;
+      // Render QR code for other devices to scan - with instant auto-pair link!
+      const hostUrl = `http://${myInfo.ip}:${myInfo.port}/?pair=${myInfo.pin || ''}`;
       document.getElementById('qr-url-text').textContent = hostUrl;
       if (window.renderQRCodeSVG) {
         document.getElementById('qr-output').innerHTML = window.renderQRCodeSVG(hostUrl, { size: 200 });
@@ -245,6 +253,13 @@
 
       // Fetch initial peer list
       fetchPeers();
+
+      // Check if URL has ?pair=XXXXXX for instant 0-second auto-connect!
+      const urlParams = new URLSearchParams(window.location.search);
+      const pairPin = urlParams.get('pair');
+      if (pairPin && pairPin !== myInfo.pin) {
+        setTimeout(() => directPairByPin(pairPin), 400);
+      }
     } catch (err) {
       console.error('Failed to init self info:', err);
     }
@@ -813,98 +828,115 @@
     document.getElementById('modal-target-picker').style.display = 'none';
   });
 
-  // --- 4G/Cellular Internet Room Mode ---
-  const btnInternetShare = document.getElementById('btn-internet-share');
-  const modalInternet = document.getElementById('modal-internet');
-  const btnCloseInternet = document.getElementById('btn-close-internet');
-  const btnCreateRoom = document.getElementById('btn-create-room');
-  const roomDisplayBox = document.getElementById('room-display-box');
-  const roomCodeVal = document.getElementById('room-code-val');
-  const btnJoinRoomAction = document.getElementById('btn-join-room-action');
-  const inputJoinRoom = document.getElementById('input-join-room');
+  // --- Reusable Direct 6-Digit Pair Function ---
+  async function directPairByPin(pin) {
+    const cleanPin = (pin || '').toString().trim().replace(/\D/g, '');
+    if (cleanPin.length !== 6) return false;
 
-  if (btnInternetShare && modalInternet) {
-    btnInternetShare.addEventListener('click', () => {
-      modalInternet.style.display = 'flex';
-    });
-    btnCloseInternet.addEventListener('click', () => {
-      modalInternet.style.display = 'none';
-    });
+    try {
+      const res = await fetch('/api/pair-by-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pin: cleanPin,
+          sender: {
+            id: myInfo.id || myClientId,
+            name: myInfo.name,
+            os: myInfo.os,
+            deviceType: myInfo.deviceType,
+            pin: myInfo.pin
+          }
+        })
+      });
 
-    // Create Room
-    btnCreateRoom.addEventListener('click', async () => {
-      try {
-        const res = await fetch('/api/room/create', { method: 'POST' });
-        const data = await res.json();
-        if (data.ok) {
-          roomCodeVal.textContent = data.roomCode;
-          roomDisplayBox.style.display = 'block';
+      const data = await res.json();
+      if (data.ok && data.peer) {
+        peersMap.set(data.peer.id, data.peer);
+        renderRadarPeers();
+        playChime('incoming');
+        showToast(`✨ Connected to ${data.peer.name}! Tap avatar to send.`);
+        return true;
+      } else {
+        showToast(`❌ ${data.error || 'Device not found'}`);
+        return false;
+      }
+    } catch (err) {
+      showToast(`Connection failed: ${err.message}`);
+      return false;
+    }
+  }
 
-          // Auto-join own room
-          await fetch('/api/room/join', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              roomCode: data.roomCode,
-              peer: {
-                id: myInfo.id || myClientId,
-                name: myInfo.name,
-                deviceType: myInfo.deviceType,
-                os: myInfo.os,
-                ip: 'Internet / 4G'
-              }
-            })
-          });
+  // Fast Connect Bar on Radar Stage (Instant Auto-Connect upon typing 6 digits)
+  const directCodeInput = document.getElementById('direct-code-input');
+  const btnDirectConnectGo = document.getElementById('btn-direct-connect-go');
 
-          showToast(`Room ${data.roomCode} created! Share this code.`);
-        }
-      } catch (err) {
-        showToast(`Failed to create room: ${err.message}`);
+  if (directCodeInput && btnDirectConnectGo) {
+    directCodeInput.addEventListener('input', () => {
+      directCodeInput.value = directCodeInput.value.replace(/\D/g, '').slice(0, 6);
+      if (directCodeInput.value.length === 6) {
+        btnDirectConnectGo.click();
       }
     });
 
-    // Join Room
-    btnJoinRoomAction.addEventListener('click', async () => {
-      const code = (inputJoinRoom.value || '').trim();
-      if (!code || code.length !== 6) {
-        showToast('Please enter a valid 6-digit room code');
+    btnDirectConnectGo.addEventListener('click', async () => {
+      const pin = directCodeInput.value.trim().replace(/\D/g, '');
+      if (pin.length !== 6) {
+        showToast('Please type a 6-digit code');
+        return;
+      }
+      btnDirectConnectGo.textContent = '...';
+      btnDirectConnectGo.disabled = true;
+      const ok = await directPairByPin(pin);
+      if (ok) directCodeInput.value = '';
+      btnDirectConnectGo.textContent = 'Connect';
+      btnDirectConnectGo.disabled = false;
+    });
+  }
+
+  // --- Direct 6-Digit PIN Pairing Modal ---
+  const btnPairPin = document.getElementById('btn-pair-pin');
+  const modalPinPair = document.getElementById('modal-pin-pair');
+  const btnClosePin = document.getElementById('btn-close-pin');
+  const btnSubmitPin = document.getElementById('btn-submit-pin');
+  const directPinInput = document.getElementById('direct-pin-input');
+
+  if (btnPairPin && modalPinPair) {
+    btnPairPin.addEventListener('click', () => {
+      directPinInput.value = '';
+      if (myInfo.pin) {
+        document.getElementById('modal-my-pin').textContent = myInfo.pin;
+      }
+      modalPinPair.style.display = 'flex';
+      setTimeout(() => directPinInput.focus(), 150);
+    });
+
+    btnClosePin.addEventListener('click', () => {
+      modalPinPair.style.display = 'none';
+    });
+
+    // Auto connect when 6 digits are typed
+    directPinInput.addEventListener('input', () => {
+      directPinInput.value = directPinInput.value.replace(/\D/g, '').slice(0, 6);
+      if (directPinInput.value.length === 6) {
+        btnSubmitPin.click();
+      }
+    });
+
+    btnSubmitPin.addEventListener('click', async () => {
+      const pin = directPinInput.value.trim().replace(/\D/g, '');
+      if (pin.length !== 6) {
+        showToast('Please enter a valid 6-digit PIN');
         return;
       }
 
-      try {
-        const res = await fetch('/api/room/join', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            roomCode: code,
-            peer: {
-              id: myInfo.id || myClientId,
-              name: myInfo.name,
-              deviceType: myInfo.deviceType,
-              os: myInfo.os,
-              ip: 'Internet / 4G'
-            }
-          })
-        });
-
-        const data = await res.json();
-        if (data.ok) {
-          // Add all peers in the room to radar
-          for (const p of data.peers) {
-            if (p.id !== (myInfo.id || myClientId)) {
-              peersMap.set(p.id, p);
-            }
-          }
-          renderRadarPeers();
-          modalInternet.style.display = 'none';
-          playChime('incoming');
-          showToast(`⚡ Joined Room ${code}! Connected via Mobile Data.`);
-        } else {
-          showToast(data.error || 'Failed to join room');
-        }
-      } catch (err) {
-        showToast(`Failed to join room: ${err.message}`);
+      btnSubmitPin.textContent = 'Connecting...';
+      btnSubmitPin.disabled = true;
+      const ok = await directPairByPin(pin);
+      if (ok) {
+        modalPinPair.style.display = 'none';
       }
+      btnSubmitPin.textContent = 'Connect Device';
+      btnSubmitPin.disabled = false;
     });
   }
 

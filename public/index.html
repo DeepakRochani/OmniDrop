@@ -38,12 +38,11 @@
         <span>Local P2P</span>
       </div>
 
-      <button id="btn-internet-share" class="action-btn glass" title="Share Over 4G/5G Cellular Mobile Data">
+      <button id="btn-pair-pin" class="action-btn glass" title="Direct 6-Digit PIN Connect">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"></circle>
-          <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"></path>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
         </svg>
-        <span>4G / Internet</span>
+        <span>Enter 6-Digit PIN</span>
       </button>
 
       <button id="btn-show-qr" class="action-btn glass" title="Connect Phone or Tablet">
@@ -71,6 +70,19 @@
 
   <!-- Main Radar Stage -->
   <main class="main-container">
+    <!-- Direct 6-Digit Fast Connect Bar (Zero-friction Apple AirDrop pairing) -->
+    <div class="direct-code-bar glass">
+      <div class="code-pill">
+        <span class="code-label">YOUR CODE</span>
+        <strong class="code-number" id="quick-my-code">------</strong>
+      </div>
+      <div class="code-divider"></div>
+      <div class="code-input-wrap">
+        <input type="tel" id="direct-code-input" maxlength="6" placeholder="Type 6-digit code of other device..." autocomplete="off" />
+        <button id="btn-direct-connect-go" class="code-go-btn">Connect</button>
+      </div>
+    </div>
+
     <div class="radar-wrapper" id="radar-dropzone">
       <!-- Sonar Waves -->
       <div class="radar-ring ring-1"></div>
@@ -85,6 +97,7 @@
         </div>
         <div class="node-info">
           <span class="node-name" id="self-name">This Device</span>
+          <span class="self-pin" id="self-pin-badge" title="Your 6-digit device PIN">PIN: ------</span>
           <span class="node-status">Discoverable to all nearby</span>
         </div>
       </div>
@@ -241,38 +254,24 @@
     </div>
   </div>
 
-  <!-- MODAL: Cellular / Internet Room Share -->
-  <div class="modal-backdrop" id="modal-internet" style="display:none;">
-    <div class="modal-card glass">
+  <!-- MODAL: Direct 6-Digit PIN Connect (Apple AirDrop PIN style) -->
+  <div class="modal-backdrop" id="modal-pin-pair" style="display:none;">
+    <div class="modal-card glass text-center">
       <div class="modal-header">
-        <h3>Share Over Mobile Data (4G/5G)</h3>
-        <button class="modal-close" id="btn-close-internet">&times;</button>
+        <h3>Connect by 6-Digit PIN</h3>
+        <button class="modal-close" id="btn-close-pin">&times;</button>
       </div>
-      <div class="modal-body text-center">
-        <p class="modal-desc">Not on the same Wi-Fi? Both devices can connect across cellular 4G/5G data using a 6-digit room code:</p>
-        
-        <div style="margin:16px 0;">
-          <button class="primary-btn" id="btn-create-room" style="width:100%;margin-bottom:12px;">Create 6-Digit Room Code</button>
-          
-          <div id="room-display-box" style="display:none;background:rgba(255,255,255,0.06);padding:14px;border-radius:12px;margin-bottom:14px;border:1px solid rgba(56,189,248,0.3);">
-            <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;letter-spacing:1px;">ROOM CODE</div>
-            <div id="room-code-val" style="font-size:32px;font-weight:800;letter-spacing:4px;color:var(--accent-cyan);">------</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Tell the other person to enter this code on their phone</div>
-          </div>
-
-          <div style="display:flex;align-items:center;gap:8px;margin:14px 0;">
-            <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
-            <span style="font-size:11px;color:var(--text-muted);letter-spacing:1px;">OR JOIN ROOM</span>
-            <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
-          </div>
-
-          <div style="display:flex;gap:8px;">
-            <input type="text" id="input-join-room" class="glass-input" placeholder="Enter 6-digit code" maxlength="6" style="margin-bottom:0;text-align:center;font-size:18px;letter-spacing:3px;font-weight:700;" />
-            <button class="secondary-btn glass" id="btn-join-room-action" style="padding:10px 18px;">Join</button>
-          </div>
-        </div>
-        <p class="qr-tip">⚡ Direct peer-to-peer data channel directly between devices.</p>
+      <p class="modal-desc">Type the 6-digit number shown on the other device's screen to connect instantly:</p>
+      
+      <div style="margin:20px 0;">
+        <input type="tel" id="direct-pin-input" maxlength="6" placeholder="000000" class="glass-input pin-big-input" autocomplete="off" />
       </div>
+
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:18px;">
+        Your device PIN: <strong id="modal-my-pin" style="color:var(--accent-cyan);letter-spacing:3px;font-size:16px;">------</strong>
+      </div>
+
+      <button class="primary-btn full-width" id="btn-submit-pin">Connect Device</button>
     </div>
   </div>
 

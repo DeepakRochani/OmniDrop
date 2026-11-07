@@ -52,3 +52,4 @@ process.on('SIGTERM', () => {
   serverProcess.kill('SIGTERM');
   process.exit(0);
 });
+
