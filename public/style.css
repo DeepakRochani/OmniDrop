@@ -1059,9 +1059,9 @@ body {
 /* Mobile Devices & Phones (<= 640px) */
 @media (max-width: 640px) {
   body {
-    height: 100vh;
-    height: 100dvh;
-    overflow: hidden;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
   }
 
   .app-header {
@@ -1123,9 +1123,10 @@ body {
   }
 
   .main-container {
-    padding: 6px 12px;
+    padding: 6px 14px;
     justify-content: space-between;
-    height: calc(100dvh - 56px);
+    flex: 1;
+    min-height: 0;
   }
 
   /* Direct Code Bar Mobile */
@@ -1255,11 +1256,13 @@ body {
     max-width: 260px;
   }
 
-  /* Bottom Action Bar Mobile */
+  /* Bottom Action Bar Mobile (Generous elevation above Safari bottom address bar) */
   .bottom-bar {
     margin-top: auto;
-    padding-bottom: max(12px, env(safe-area-inset-bottom, 14px));
+    margin-bottom: max(28px, calc(env(safe-area-inset-bottom) + 20px));
+    padding-bottom: 0;
     max-width: 100%;
+    z-index: 20;
   }
 
   .quick-file-selector {
@@ -1333,6 +1336,10 @@ body {
   .primary-btn, .secondary-btn {
     padding: 9px 10px;
     font-size: 12px;
+  }
+
+  .bottom-bar {
+    margin-bottom: max(22px, calc(env(safe-area-inset-bottom) + 16px));
   }
 }
 
