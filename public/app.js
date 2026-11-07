@@ -193,6 +193,13 @@
     }, duration);
   }
 
+  // Persistent client identity per tab/device
+  let myClientId = sessionStorage.getItem('omnidrop_client_id');
+  if (!myClientId) {
+    myClientId = 'c_' + Math.random().toString(36).substring(2, 9);
+    sessionStorage.setItem('omnidrop_client_id', myClientId);
+  }
+
   // --- Fetch Self Info & Setup SSE ---
   async function initSelf() {
     try {
@@ -205,6 +212,7 @@
       const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
 
       if (isRemoteClient) {
+        myInfo.id = myClientId;
         myInfo.os = clientOS;
         myInfo.deviceType = clientType;
         myInfo.name = `${clientOS.toUpperCase()} Device`;
@@ -214,6 +222,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            id: myClientId,
             name: myInfo.name,
             deviceType: myInfo.deviceType,
             os: myInfo.os
@@ -231,7 +240,7 @@
         document.getElementById('qr-output').innerHTML = window.renderQRCodeSVG(hostUrl, { size: 200 });
       }
 
-      // Connect SSE stream
+      // Connect SSE stream with our specific client ID
       connectSSE();
 
       // Fetch initial peer list
@@ -244,7 +253,7 @@
   // --- Real-time SSE Stream ---
   function connectSSE() {
     if (eventSource) eventSource.close();
-    eventSource = new EventSource('/api/events');
+    eventSource = new EventSource('/api/events?clientId=' + encodeURIComponent(myInfo.id || myClientId));
 
     eventSource.addEventListener('peer_joined', e => {
       const peer = JSON.parse(e.data);
@@ -269,10 +278,24 @@
       renderRadarPeers();
     });
 
+    // When someone joins our 4G/Cellular Room
+    eventSource.addEventListener('room_peer_joined', e => {
+      const data = JSON.parse(e.data);
+      if (data.peer && data.peer.id !== (myInfo.id || myClientId)) {
+        peersMap.set(data.peer.id, data.peer);
+        renderRadarPeers();
+        playChime('incoming');
+        showToast(`⚡ ${data.peer.name} joined room via Mobile Data!`);
+      }
+    });
+
     // Incoming file transfer request
     eventSource.addEventListener('transfer_request', e => {
       const req = JSON.parse(e.data);
-      handleIncomingTransferPrompt(req);
+      // Only prompt if we are the intended recipient or host
+      if (!req.targetId || req.targetId === myInfo.id || req.targetId === myClientId) {
+        handleIncomingTransferPrompt(req);
+      }
     });
 
     // Transfer progress updates
@@ -285,6 +308,24 @@
     eventSource.addEventListener('transfer_complete', e => {
       const comp = JSON.parse(e.data);
       onTransferComplete(comp);
+    });
+
+    // File ready for download (for mobile/web clients receiving a file)
+    eventSource.addEventListener('file_ready_for_download', e => {
+      const data = JSON.parse(e.data);
+      playChime('success');
+      showToast(`📥 Received ${data.fileName} (${data.formattedSize})!`);
+      
+      // Auto-trigger browser download or open
+      const a = document.createElement('a');
+      a.href = data.downloadUrl;
+      a.download = data.fileName;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 1000);
+
+      updateHistoryBadge();
     });
 
     // Received instant text/clipboard
@@ -424,14 +465,15 @@
     progressModal.style.display = 'flex';
 
     try {
-      // Step 1: Request permission from target device
-      const targetUrl = `http://${targetPeer.ip}:${targetPeer.port}/api/transfer/request`;
+      // Step 1: Request permission via local server relay (works for both web & native clients)
+      const targetUrl = '/api/transfer/request';
       const reqRes = await fetch(targetUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           transferId,
-          sender: { id: myInfo.id, name: myInfo.name, os: myInfo.os },
+          sender: { id: myInfo.id || myClientId, name: myInfo.name, os: myInfo.os },
+          targetId: targetPeer.id,
           files: fileMetaList,
           totalSize
         })
@@ -444,7 +486,7 @@
         return;
       }
 
-      // Step 2: Stream each file
+      // Step 2: Stream each file to local upload endpoint
       document.getElementById('progress-title').textContent = 'Sending Files...';
       document.getElementById('progress-target').textContent = `Transferring to ${targetPeer.name}`;
 
@@ -452,7 +494,7 @@
         const file = files[i];
         document.getElementById('progress-filename').textContent = `${file.name} (${i + 1}/${files.length})`;
 
-        const uploadUrl = `http://${targetPeer.ip}:${targetPeer.port}/api/transfer/upload/${transferId}/${i}`;
+        const uploadUrl = `/api/transfer/upload/${transferId}/${i}`;
         await uploadFileWithProgress(uploadUrl, file, transferId, i, totalSize);
       }
 
@@ -770,6 +812,101 @@
   document.getElementById('btn-close-picker').addEventListener('click', () => {
     document.getElementById('modal-target-picker').style.display = 'none';
   });
+
+  // --- 4G/Cellular Internet Room Mode ---
+  const btnInternetShare = document.getElementById('btn-internet-share');
+  const modalInternet = document.getElementById('modal-internet');
+  const btnCloseInternet = document.getElementById('btn-close-internet');
+  const btnCreateRoom = document.getElementById('btn-create-room');
+  const roomDisplayBox = document.getElementById('room-display-box');
+  const roomCodeVal = document.getElementById('room-code-val');
+  const btnJoinRoomAction = document.getElementById('btn-join-room-action');
+  const inputJoinRoom = document.getElementById('input-join-room');
+
+  if (btnInternetShare && modalInternet) {
+    btnInternetShare.addEventListener('click', () => {
+      modalInternet.style.display = 'flex';
+    });
+    btnCloseInternet.addEventListener('click', () => {
+      modalInternet.style.display = 'none';
+    });
+
+    // Create Room
+    btnCreateRoom.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/room/create', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          roomCodeVal.textContent = data.roomCode;
+          roomDisplayBox.style.display = 'block';
+
+          // Auto-join own room
+          await fetch('/api/room/join', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              roomCode: data.roomCode,
+              peer: {
+                id: myInfo.id || myClientId,
+                name: myInfo.name,
+                deviceType: myInfo.deviceType,
+                os: myInfo.os,
+                ip: 'Internet / 4G'
+              }
+            })
+          });
+
+          showToast(`Room ${data.roomCode} created! Share this code.`);
+        }
+      } catch (err) {
+        showToast(`Failed to create room: ${err.message}`);
+      }
+    });
+
+    // Join Room
+    btnJoinRoomAction.addEventListener('click', async () => {
+      const code = (inputJoinRoom.value || '').trim();
+      if (!code || code.length !== 6) {
+        showToast('Please enter a valid 6-digit room code');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/room/join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomCode: code,
+            peer: {
+              id: myInfo.id || myClientId,
+              name: myInfo.name,
+              deviceType: myInfo.deviceType,
+              os: myInfo.os,
+              ip: 'Internet / 4G'
+            }
+          })
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+          // Add all peers in the room to radar
+          for (const p of data.peers) {
+            if (p.id !== (myInfo.id || myClientId)) {
+              peersMap.set(p.id, p);
+            }
+          }
+          renderRadarPeers();
+          modalInternet.style.display = 'none';
+          playChime('incoming');
+          showToast(`⚡ Joined Room ${code}! Connected via Mobile Data.`);
+        } else {
+          showToast(data.error || 'Failed to join room');
+        }
+      } catch (err) {
+        showToast(`Failed to join room: ${err.message}`);
+      }
+    });
+  }
 
   // Text Share Button
   document.getElementById('btn-quick-text').addEventListener('click', () => {

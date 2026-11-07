@@ -49,9 +49,10 @@ const deviceType = 'desktop';
 
 // In-memory states
 const peers = new Map(); // id -> { id, name, deviceType, os, ip, port, lastSeen, isWeb }
-const sseClients = new Set(); // Set of http.ServerResponse
-const activeTransfers = new Map(); // transferId -> { id, sender, receiver, files, status, totalBytes, transferredBytes, resolveAccept }
+const sseClients = new Map(); // clientId -> res
+const activeTransfers = new Map(); // transferId -> { id, sender, targetId, files, status, totalBytes, transferredBytes, resolveAccept }
 const receivedFilesHistory = [];
+const rooms = new Map(); // roomCode -> Set of { id, name, os, deviceType }
 
 // Helper: Get local IP addresses and broadcast addresses
 function getNetworkInterfacesInfo() {
@@ -85,13 +86,26 @@ const networkInfo = getNetworkInterfacesInfo();
 // --- SSE Event Dispatcher ---
 function broadcastSSE(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const client of sseClients) {
+  for (const [clientId, client] of sseClients.entries()) {
     try {
       client.write(payload);
     } catch (err) {
-      sseClients.delete(client);
+      sseClients.delete(clientId);
     }
   }
+}
+
+function sendSSEToClient(clientId, event, data) {
+  const client = sseClients.get(clientId);
+  if (client) {
+    try {
+      client.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      return true;
+    } catch (err) {
+      sseClients.delete(clientId);
+    }
+  }
+  return false;
 }
 
 // --- UDP Discovery Service ---
@@ -389,17 +403,65 @@ function handleRequest(req, res) {
 
   // --- API: SSE Event Stream ---
   if (req.method === 'GET' && pathname === '/api/events') {
+    const clientQueryId = parsedUrl.searchParams.get('clientId') || ('client_' + crypto.randomBytes(4).toString('hex'));
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive'
     });
-    res.write(`event: init\ndata: ${JSON.stringify({ id: deviceId, name: deviceName, os: detectedOS })}\n\n`);
+    res.write(`event: init\ndata: ${JSON.stringify({ id: deviceId, name: deviceName, os: detectedOS, clientId: clientQueryId })}\n\n`);
 
-    sseClients.add(res);
+    sseClients.set(clientQueryId, res);
 
     req.on('close', () => {
-      sseClients.delete(res);
+      sseClients.delete(clientQueryId);
+    });
+    return;
+  }
+
+  // --- API: Internet / Cellular Room Signaling ---
+  if (req.method === 'POST' && pathname === '/api/room/create') {
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    rooms.set(code, new Map());
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, roomCode: code }));
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/room/join') {
+    parseJsonBody(req).then(data => {
+      const { roomCode, peer } = data;
+      const room = rooms.get(roomCode);
+      if (!room) {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'Room code not found' }));
+        return;
+      }
+      room.set(peer.id, peer);
+      // Notify other peers in room
+      for (const [pid, p] of room.entries()) {
+        if (pid !== peer.id) {
+          sendSSEToClient(pid, 'room_peer_joined', { roomCode, peer });
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, peers: Array.from(room.values()) }));
+    }).catch(err => {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: err.message }));
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/room/signal') {
+    parseJsonBody(req).then(data => {
+      const { toId, fromId, signal } = data;
+      sendSSEToClient(toId, 'room_signal', { fromId, signal });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    }).catch(err => {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: err.message }));
     });
     return;
   }
@@ -475,7 +537,7 @@ function handleRequest(req, res) {
   // Called by sender's frontend to ask receiver for permission
   if (req.method === 'POST' && pathname === '/api/transfer/request') {
     parseJsonBody(req).then(data => {
-      const { transferId, sender, files, totalSize } = data;
+      const { transferId, sender, targetId, files, totalSize } = data;
       if (!transferId || !files || !Array.isArray(files)) {
         res.writeHead(400);
         res.end(JSON.stringify({ error: 'Invalid transfer payload' }));
@@ -491,6 +553,7 @@ function handleRequest(req, res) {
       activeTransfers.set(transferId, {
         id: transferId,
         sender: sender,
+        targetId: targetId,
         files: files,
         totalSize: totalSize,
         status: 'pending',
@@ -499,14 +562,21 @@ function handleRequest(req, res) {
         resolveAccept: resolveAcceptance
       });
 
-      // Notify local UI that someone wants to send files
-      broadcastSSE('transfer_request', {
+      const reqPayload = {
         transferId,
         sender,
+        targetId,
         files,
         totalSize,
         formattedSize: formatBytes(totalSize)
-      });
+      };
+
+      // If targetId is explicitly specified and not local device, send directly to that client via SSE
+      if (targetId && targetId !== deviceId && sseClients.has(targetId)) {
+        sendSSEToClient(targetId, 'transfer_request', reqPayload);
+      } else {
+        broadcastSSE('transfer_request', reqPayload);
+      }
 
       // Wait up to 60 seconds for receiver user to click Accept or Decline
       const timeout = setTimeout(() => {
@@ -650,6 +720,18 @@ function handleRequest(req, res) {
           savedDirectory: DOWNLOADS_DIR,
           lastFile: record
         });
+
+        // If target was a mobile/web client (e.g. iPhone Safari), tell them the file is ready to download!
+        if (transfer.targetId && transfer.targetId !== deviceId) {
+          sendSSEToClient(transfer.targetId, 'file_ready_for_download', {
+            transferId: transferId,
+            fileName: record.name,
+            downloadUrl: `/api/download/${encodeURIComponent(record.name)}`,
+            formattedSize: record.formattedSize,
+            sender: transfer.sender ? transfer.sender.name : 'Nearby Device'
+          });
+        }
+
         activeTransfers.delete(transferId);
       }
 
