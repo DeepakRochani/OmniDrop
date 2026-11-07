@@ -33,6 +33,11 @@
     </div>
 
     <div class="header-actions">
+      <div class="e2ee-indicator glass" title="Direct Peer-to-Peer Transfer (No Cloud)">
+        <span class="e2ee-dot"></span>
+        <span>Local P2P</span>
+      </div>
+
       <button id="btn-show-qr" class="action-btn glass" title="Connect Phone or Tablet">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM14 14h3v3h-3zM18 18h3v3h-3zM18 14h3v1h-3zM14 18h1v3h-1z" />
@@ -93,18 +98,27 @@
     <div class="bottom-bar">
       <div class="quick-file-selector glass">
         <input type="file" id="global-file-input" multiple style="display: none;" />
+        <input type="file" id="global-folder-input" webkitdirectory directory multiple style="display: none;" />
+        
         <button class="primary-btn" id="btn-select-files">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
           </svg>
-          <span>Select Files or Photos</span>
+          <span>Select Files</span>
+        </button>
+
+        <button class="secondary-btn glass" id="btn-select-folder" title="Send entire folder">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+          <span>Folder</span>
         </button>
 
         <button class="secondary-btn glass" id="btn-quick-text" title="Share text or link">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
           </svg>
-          <span>Share Text</span>
+          <span>Text</span>
         </button>
       </div>
     </div>
@@ -114,11 +128,18 @@
   <div class="modal-backdrop" id="modal-qr" style="display:none;">
     <div class="modal-card glass">
       <div class="modal-header">
-        <h3>Connect Phone or Tablet</h3>
+        <h3>Connect Device</h3>
         <button class="modal-close" id="btn-close-qr">&times;</button>
       </div>
-      <div class="modal-body text-center">
-        <p class="modal-desc">Point your iPhone, iPad, or Android camera at this QR code to join without installing an app:</p>
+
+      <!-- Tabs: Local Wi-Fi vs Hotspot -->
+      <div class="modal-tabs">
+        <button class="modal-tab active" id="tab-qr-wifi">Same Wi-Fi</button>
+        <button class="modal-tab" id="tab-qr-hotspot">No Wi-Fi / Hotspot</button>
+      </div>
+
+      <div class="modal-body text-center" id="qr-body-wifi">
+        <p class="modal-desc">Scan with iPhone, iPad, or Android camera to open OmniDrop in your mobile browser:</p>
         <div class="qr-canvas-container" id="qr-output">
           <!-- SVG QR Code rendered here -->
         </div>
@@ -126,7 +147,20 @@
           <span id="qr-url-text">http://192.168.1.33:53317</span>
           <button class="copy-btn" id="btn-copy-url">Copy</button>
         </div>
-        <p class="qr-tip">💡 No app required! Works in Safari, Chrome, Edge, and all mobile browsers.</p>
+        <p class="qr-tip">💡 Zero install needed! Works in Safari, Chrome, and all mobile browsers.</p>
+      </div>
+
+      <div class="modal-body text-center" id="qr-body-hotspot" style="display:none;">
+        <p class="modal-desc">Outdoors or no router? Turn on Mobile Hotspot on one phone, enter credentials here, and scan to connect automatically:</p>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <input type="text" id="hotspot-ssid" class="glass-input" placeholder="Hotspot Name (SSID)" style="margin-bottom:0;" />
+          <input type="password" id="hotspot-pass" class="glass-input" placeholder="Password" style="margin-bottom:0;" />
+        </div>
+        <button class="primary-btn" id="btn-gen-hotspot-qr" style="width:100%;margin-bottom:10px;padding:8px 12px;font-size:12px;">Generate Wi-Fi QR</button>
+        <div class="qr-canvas-container" id="qr-output-hotspot">
+          <!-- Hotspot QR rendered here -->
+        </div>
+        <p class="qr-tip">⚡ iPhone and Android will prompt "Join Wi-Fi Network" upon scanning!</p>
       </div>
     </div>
   </div>
@@ -238,3 +272,4 @@
   <script src="/app.js"></script>
 </body>
 </html>
+

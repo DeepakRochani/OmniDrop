@@ -100,3 +100,4 @@ npx electron .
 
 Running `npm run dist:mac` creates a `.dmg` installer for macOS.
 Running `npm run dist:win` creates a `.exe` installer for Windows.
+

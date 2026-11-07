@@ -82,3 +82,4 @@ You will see:
 
 Want to compile OmniDrop into a standalone native mobile app (.apk / .ipa)?
 Check out the [Mobile Packaging Guide](file:///Users/drfilms/Documents/Andirod%20Airdrop/docs/MOBILE_PACKAGING.md) for step-by-step instructions using **Capacitor** and **Electron/Tauri**.
+

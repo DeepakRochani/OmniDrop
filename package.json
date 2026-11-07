@@ -3,9 +3,15 @@
   "version": "1.0.0",
   "description": "Universal Cross-Platform AirDrop for Android, iOS, Windows, Mac, Linux, and Tablets",
   "main": "server.js",
+  "bin": {
+    "omnidrop": "bin/omnidrop.js"
+  },
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "cap:sync": "npx cap sync",
+    "cap:android": "npx cap open android",
+    "cap:ios": "npx cap open ios"
   },
   "keywords": [
     "airdrop",
@@ -19,3 +25,4 @@
   "author": "Antigravity",
   "license": "MIT"
 }
+

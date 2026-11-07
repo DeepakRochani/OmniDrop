@@ -123,3 +123,4 @@ Upon acceptance, the sender streams each file directly into the receiver's disk 
 | **iPad / Tablets** | ✅ Full Speed | ✅ Full Speed | ✅ Full Speed | ✅ Full Speed | ✅ Full Speed |
 | **Windows PC** | ✅ Full Speed | ✅ Full Speed | ✅ Full Speed | ✅ Full Speed | ✅ Full Speed |
 | **Mac** | ✅ Full Speed | ✅ Full Speed | ✅ Full Speed | ✅ Full Speed | ✅ Full Speed |
+

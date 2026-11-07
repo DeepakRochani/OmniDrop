@@ -658,6 +658,75 @@
     fetch('/api/open-downloads', { method: 'POST' });
   });
 
+  // Folder Selection Handler
+  const folderInput = document.getElementById('global-folder-input');
+  const btnSelectFolder = document.getElementById('btn-select-folder');
+  if (btnSelectFolder && folderInput) {
+    btnSelectFolder.addEventListener('click', () => {
+      const peerList = Array.from(peersMap.values());
+      if (peerList.length === 0) {
+        showToast('No nearby devices found. Tap "Connect Phone" to scan QR code!');
+        document.getElementById('modal-qr').style.display = 'flex';
+        return;
+      }
+      folderInput.value = '';
+      folderInput.onchange = (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length > 0) {
+          if (peerList.length === 1) {
+            initiateSendFiles(peerList[0], files);
+          } else {
+            // Pick target
+            selectedFilesToSend = files;
+            document.getElementById('btn-select-files').click();
+          }
+        }
+      };
+      folderInput.click();
+    });
+  }
+
+  // QR Modal Tabs (Same Wi-Fi vs Hotspot)
+  const tabWifi = document.getElementById('tab-qr-wifi');
+  const tabHotspot = document.getElementById('tab-qr-hotspot');
+  const bodyWifi = document.getElementById('qr-body-wifi');
+  const bodyHotspot = document.getElementById('qr-body-hotspot');
+
+  if (tabWifi && tabHotspot) {
+    tabWifi.addEventListener('click', () => {
+      tabWifi.classList.add('active');
+      tabHotspot.classList.remove('active');
+      bodyWifi.style.display = 'block';
+      bodyHotspot.style.display = 'none';
+    });
+
+    tabHotspot.addEventListener('click', () => {
+      tabHotspot.classList.add('active');
+      tabWifi.classList.remove('active');
+      bodyWifi.style.display = 'none';
+      bodyHotspot.style.display = 'block';
+    });
+  }
+
+  // Wi-Fi Hotspot QR Generator (Outdoor Mode)
+  const btnGenHotspot = document.getElementById('btn-gen-hotspot-qr');
+  if (btnGenHotspot) {
+    btnGenHotspot.addEventListener('click', () => {
+      const ssid = (document.getElementById('hotspot-ssid').value || '').trim();
+      const pass = (document.getElementById('hotspot-pass').value || '').trim();
+      if (!ssid) {
+        showToast('Please enter Hotspot Name (SSID)');
+        return;
+      }
+      // Standard Wi-Fi connection QR payload
+      const wifiPayload = `WIFI:T:WPA;S:${ssid};P:${pass};;`;
+      if (window.renderQRCodeSVG) {
+        document.getElementById('qr-output-hotspot').innerHTML = window.renderQRCodeSVG(wifiPayload, { size: 180 });
+      }
+      showToast('Wi-Fi QR Code generated! Scan to join hotspot.');
+    });
+  }
+
   // Global "Select Files" Button -> Shows Target Device Picker
   document.getElementById('btn-select-files').addEventListener('click', () => {
     const peerList = Array.from(peersMap.values());
@@ -808,3 +877,4 @@
   initSelf();
   updateHistoryBadge();
 })();
+

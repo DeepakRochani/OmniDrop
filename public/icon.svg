@@ -11,3 +11,4 @@
   <circle cx="256" cy="256" r="40" fill="#ffffff" />
   <path d="M256 120 L256 220 M256 120 L216 160 M256 120 L296 160" stroke="#ffffff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" />
 </svg>
+

@@ -501,3 +501,4 @@
     return svg.join('');
   };
 })(window);
+
