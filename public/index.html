@@ -331,6 +331,138 @@
     </div>
   </div>
 
+  <!-- SETTINGS MODAL (Device Identity, Sound & Haptics, Preferences) -->
+  <div class="modal-backdrop" id="modal-settings" style="display:none;">
+    <div class="modal-card glass settings-card">
+      <div class="modal-header">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div class="settings-header-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          </div>
+          <h3>Settings</h3>
+        </div>
+        <button class="modal-close" id="btn-close-settings" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+
+      <div class="settings-content">
+        <!-- Section: Device Name -->
+        <div class="settings-section">
+          <div class="settings-section-title">DEVICE IDENTITY</div>
+          <div class="settings-row">
+            <div class="settings-input-wrap">
+              <input type="text" id="setting-device-name" class="glass-input" placeholder="Device Name" maxlength="32" />
+              <button id="btn-save-device-name" class="secondary-btn" style="padding:8px 14px;border-radius:12px;font-size:12px;white-space:nowrap;">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section: Sound & Haptics -->
+        <div class="settings-section">
+          <div class="settings-section-title">SOUND &amp; HAPTICS</div>
+
+          <!-- Sound Toggle -->
+          <div class="settings-row flex-between">
+            <div>
+              <div class="setting-label">Audio Chimes</div>
+              <div class="setting-sub">AirDrop sound alerts on transfer</div>
+            </div>
+            <label class="ios-switch">
+              <input type="checkbox" id="setting-sound-enabled" checked />
+              <span class="ios-slider"></span>
+            </label>
+          </div>
+
+          <!-- Chime Theme Selector -->
+          <div class="settings-row">
+            <div class="setting-label" style="margin-bottom:8px;">Chime Sound Style</div>
+            <div class="chime-picker-grid" id="chime-picker-grid">
+              <button class="chime-btn active" data-chime="apple">
+                <span class="chime-emoji">🍏</span>
+                <span class="chime-name">Apple AirDrop</span>
+              </button>
+              <button class="chime-btn" data-chime="crystal">
+                <span class="chime-emoji">💎</span>
+                <span class="chime-name">Crystal Bell</span>
+              </button>
+              <button class="chime-btn" data-chime="modern">
+                <span class="chime-emoji">💫</span>
+                <span class="chime-name">Modern Drop</span>
+              </button>
+              <button class="chime-btn" data-chime="arcade">
+                <span class="chime-emoji">👾</span>
+                <span class="chime-name">Retro 8-Bit</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Volume & Test Sound -->
+          <div class="settings-row">
+            <div class="flex-between" style="margin-bottom:6px;">
+              <span class="setting-label">Chime Volume</span>
+              <span id="volume-val-display" style="font-size:12px;color:var(--accent-cyan);font-weight:700;">80%</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <svg style="width:16px;height:16px;color:var(--text-muted);flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/></svg>
+              <input type="range" id="setting-sound-volume" min="0" max="100" value="80" class="ios-range" />
+              <svg style="width:18px;height:18px;color:var(--accent-cyan);flex-shrink:0;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
+            </div>
+            <div style="margin-top:10px;">
+              <button id="btn-test-chime" class="action-test-btn glass">
+                <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <span>Preview Chime Sound</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Haptic Vibration -->
+          <div class="settings-row flex-between" style="margin-top:10px;">
+            <div>
+              <div class="setting-label">Haptic Feedback</div>
+              <div class="setting-sub">Vibration on alerts and transfers</div>
+            </div>
+            <label class="ios-switch">
+              <input type="checkbox" id="setting-haptic-enabled" checked />
+              <span class="ios-slider"></span>
+            </label>
+          </div>
+
+          <!-- Haptic Intensity -->
+          <div class="settings-row" id="haptic-intensity-wrap">
+            <div class="setting-label" style="margin-bottom:8px;">Haptic Intensity</div>
+            <div class="haptic-picker-grid">
+              <button class="haptic-btn" data-haptic="light">Light Tap</button>
+              <button class="haptic-btn active" data-haptic="medium">Standard</button>
+              <button class="haptic-btn" data-haptic="strong">Strong Pulse</button>
+            </div>
+            <div style="margin-top:10px;">
+              <button id="btn-test-haptic" class="action-test-btn glass">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2zM19 8a2 2 0 010 4M5 8a2 2 0 000 4"/></svg>
+                <span>Feel Vibration</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section: Transfer Automation -->
+        <div class="settings-section">
+          <div class="settings-section-title">TRANSFER PREFERENCES</div>
+          <div class="settings-row flex-between">
+            <div>
+              <div class="setting-label">Automatic File Download</div>
+              <div class="setting-sub">Save received files immediately</div>
+            </div>
+            <label class="ios-switch">
+              <input type="checkbox" id="setting-auto-download" checked />
+              <span class="ios-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/qrcode.js"></script>
   <script src="/app.js"></script>
 </body>

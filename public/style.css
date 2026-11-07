@@ -1407,6 +1407,231 @@ body {
 }
 
 /* Extra Small Phones (<= 380px e.g. iPhone SE) */
+/* Settings Modal & Sound/Haptics */
+.settings-card {
+  max-width: 460px;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 22px 20px;
+  -webkit-overflow-scrolling: touch;
+}
+.settings-header-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(37, 99, 235, 0.2));
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-cyan);
+}
+.settings-header-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.settings-section {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+.settings-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--accent-cyan);
+  margin-bottom: 12px;
+}
+.settings-row {
+  margin-bottom: 12px;
+}
+.settings-row:last-child {
+  margin-bottom: 0;
+}
+.flex-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.setting-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+.setting-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.settings-input-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.settings-input-wrap input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 8px 12px;
+  color: white;
+  font-size: 13px;
+  outline: none;
+}
+.settings-input-wrap input:focus {
+  border-color: var(--accent-cyan);
+}
+
+/* Apple iOS Toggle Switch */
+.ios-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 26px;
+  flex-shrink: 0;
+}
+.ios-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.ios-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: rgba(255, 255, 255, 0.18);
+  transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 26px;
+}
+.ios-slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 50%;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.ios-switch input:checked + .ios-slider {
+  background-color: #10b981; /* Apple iOS Active Green */
+}
+.ios-switch input:checked + .ios-slider:before {
+  transform: translateX(18px);
+}
+
+/* Chime Theme Grid */
+.chime-picker-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.chime-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.chime-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.chime-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: var(--accent-cyan);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+}
+.chime-emoji {
+  font-size: 16px;
+}
+
+/* Haptic Picker Grid */
+.haptic-picker-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+.haptic-btn {
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+.haptic-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.haptic-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: var(--accent-cyan);
+  color: #ffffff;
+}
+
+/* iOS Range Slider */
+.ios-range {
+  flex: 1;
+  -webkit-appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.15);
+  outline: none;
+}
+.ios-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Action Test Button */
+.action-test-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+}
+.action-test-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+.action-test-btn:active {
+  transform: scale(0.96);
+}
+
 @media (max-width: 380px) {
   .app-header {
     padding: 6px 8px;

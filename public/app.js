@@ -25,6 +25,16 @@
   let eventSource = null;
   const completedTransfers = new Set();
 
+  // --- Sound & Haptics Preferences (Saved in LocalStorage) ---
+  const settings = {
+    soundEnabled: localStorage.getItem('omnidrop_sound_enabled') !== 'false',
+    soundVolume: parseFloat(localStorage.getItem('omnidrop_sound_volume') || '0.8'),
+    soundTheme: localStorage.getItem('omnidrop_sound_theme') || 'apple',
+    hapticEnabled: localStorage.getItem('omnidrop_haptic_enabled') !== 'false',
+    hapticMode: localStorage.getItem('omnidrop_haptic_mode') || 'medium',
+    autoDownload: localStorage.getItem('omnidrop_auto_download') !== 'false'
+  };
+
   // Audio Context for AirDrop Chimes (Zero external audio file needed!)
   let audioCtx = null;
   function getAudioContext() {
@@ -35,45 +45,163 @@
     return audioCtx;
   }
 
+  // --- Multi-Theme Web Audio Synthesizer ---
   function playChime(type) {
-    try {
-      const ctx = getAudioContext();
-      if (!ctx) return;
-      if (ctx.state === 'suspended') ctx.resume();
-
-      const now = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      if (type === 'incoming') {
-        // AirDrop double ping chime
-        osc.frequency.setValueAtTime(587.33, now); // D5
-        osc.frequency.setValueAtTime(880, now + 0.12); // A5
-        gain.gain.setValueAtTime(0.2, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
-        osc.start(now);
-        osc.stop(now + 0.5);
-      } else if (type === 'success') {
-        // Success triple rising chord
-        osc.frequency.setValueAtTime(523.25, now); // C5
-        osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
-        osc.frequency.setValueAtTime(783.99, now + 0.2); // G5
-        gain.gain.setValueAtTime(0.25, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
-        osc.start(now);
-        osc.stop(now + 0.65);
-      }
-    } catch (e) {}
-
-    // Haptic vibration on supported mobile devices
-    if ('vibrate' in navigator) {
+    if (settings.soundEnabled) {
       try {
-        navigator.vibrate(type === 'incoming' ? [50, 80, 50] : [30, 40, 80]);
+        const ctx = getAudioContext();
+        if (ctx) {
+          if (ctx.state === 'suspended') ctx.resume();
+
+          const now = ctx.currentTime;
+          const vol = Math.max(0.01, Math.min(1.0, settings.soundVolume));
+          const theme = settings.soundTheme || 'apple';
+
+          if (theme === 'apple') {
+            // Classic Apple AirDrop double bell ping & swoop
+            if (type === 'incoming') {
+              const osc1 = ctx.createOscillator();
+              const gain1 = ctx.createGain();
+              osc1.connect(gain1);
+              gain1.connect(ctx.destination);
+              osc1.frequency.setValueAtTime(587.33, now); // D5
+              gain1.gain.setValueAtTime(0.24 * vol, now);
+              gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+              osc1.start(now);
+              osc1.stop(now + 0.4);
+
+              const osc2 = ctx.createOscillator();
+              const gain2 = ctx.createGain();
+              osc2.connect(gain2);
+              gain2.connect(ctx.destination);
+              osc2.frequency.setValueAtTime(880.00, now + 0.12); // A5
+              gain2.gain.setValueAtTime(0.3 * vol, now + 0.12);
+              gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
+              osc2.start(now + 0.12);
+              osc2.stop(now + 0.65);
+            } else if (type === 'success') {
+              [
+                { f: 523.25, t: 0, d: 0.25 },
+                { f: 783.99, t: 0.10, d: 0.30 },
+                { f: 1046.50, t: 0.20, d: 0.50 }
+              ].forEach(note => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.setValueAtTime(note.f, now + note.t);
+                gain.gain.setValueAtTime(0.28 * vol, now + note.t);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + note.t + note.d);
+                osc.start(now + note.t);
+                osc.stop(now + note.t + note.d);
+              });
+            }
+          } else if (theme === 'crystal') {
+            // High crystal glass chime with shimmering harmonics
+            if (type === 'incoming') {
+              [880, 1318.51, 1760].forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.setValueAtTime(freq, now + i * 0.05);
+                gain.gain.setValueAtTime((0.2 - i * 0.04) * vol, now + i * 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
+                osc.start(now + i * 0.05);
+                osc.stop(now + 0.75);
+              });
+            } else if (type === 'success') {
+              [1318.51, 1661.22, 1975.53, 2637.02].forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.setValueAtTime(freq, now + i * 0.08);
+                gain.gain.setValueAtTime(0.22 * vol, now + i * 0.08);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.08 + 0.5);
+                osc.start(now + i * 0.08);
+                osc.stop(now + i * 0.08 + 0.55);
+              });
+            }
+          } else if (theme === 'modern') {
+            // Soft acoustic pulse & modern sweep
+            if (type === 'incoming') {
+              const osc = ctx.createOscillator();
+              const gain = ctx.createGain();
+              osc.type = 'triangle';
+              osc.connect(gain);
+              gain.connect(ctx.destination);
+              osc.frequency.setValueAtTime(750, now);
+              osc.frequency.exponentialRampToValueAtTime(320, now + 0.15);
+              gain.gain.setValueAtTime(0.35 * vol, now);
+              gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+              osc.start(now);
+              osc.stop(now + 0.4);
+            } else if (type === 'success') {
+              const osc = ctx.createOscillator();
+              const gain = ctx.createGain();
+              osc.type = 'sine';
+              osc.connect(gain);
+              gain.connect(ctx.destination);
+              osc.frequency.setValueAtTime(420, now);
+              osc.frequency.exponentialRampToValueAtTime(1150, now + 0.22);
+              gain.gain.setValueAtTime(0.3 * vol, now);
+              gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+              osc.start(now);
+              osc.stop(now + 0.5);
+            }
+          } else if (theme === 'arcade') {
+            // 8-bit retro gaming chime
+            if (type === 'incoming') {
+              [587.33, 880, 1174.66].forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'square';
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.setValueAtTime(freq, now + i * 0.06);
+                gain.gain.setValueAtTime(0.12 * vol, now + i * 0.06);
+                gain.gain.setValueAtTime(0.001, now + i * 0.06 + 0.05);
+                osc.start(now + i * 0.06);
+                osc.stop(now + i * 0.06 + 0.06);
+              });
+            } else if (type === 'success') {
+              [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'square';
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.setValueAtTime(freq, now + i * 0.07);
+                gain.gain.setValueAtTime(0.13 * vol, now + i * 0.07);
+                gain.gain.setValueAtTime(0.001, now + i * 0.07 + 0.06);
+                osc.start(now + i * 0.07);
+                osc.stop(now + i * 0.07 + 0.07);
+              });
+            }
+          }
+        }
       } catch (e) {}
     }
+
+    // Trigger haptic vibration
+    playHaptic(type);
+  }
+
+  // --- Customizable Haptic Feedback Engine ---
+  function playHaptic(type) {
+    if (!settings.hapticEnabled || !('vibrate' in navigator)) return;
+
+    try {
+      const mode = settings.hapticMode || 'medium';
+      if (mode === 'light') {
+        navigator.vibrate(type === 'incoming' ? [25] : [35]);
+      } else if (mode === 'medium') {
+        navigator.vibrate(type === 'incoming' ? [50, 40, 50] : [40, 30, 80]);
+      } else if (mode === 'strong') {
+        navigator.vibrate(type === 'incoming' ? [100, 50, 100] : [80, 40, 140]);
+      }
+    } catch (e) {}
   }
 
   // --- SVG Icons Provider ---
@@ -944,6 +1072,7 @@
   setupDismissableModal('modal-target-picker', 'btn-close-picker');
   setupDismissableModal('modal-file-ready', 'btn-close-file-ready');
   setupDismissableModal('modal-progress', 'btn-close-progress');
+  setupDismissableModal('modal-settings', 'btn-close-settings');
   setupDismissableModal('modal-incoming', 'btn-close-incoming', () => {
     const btnDecline = document.getElementById('btn-incoming-decline');
     if (btnDecline) btnDecline.click();
@@ -952,7 +1081,7 @@
   // Global Escape key dismiss for physical keyboards (Mac/PC/iPad)
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      ['modal-qr', 'modal-pin-pair', 'modal-text', 'modal-target-picker', 'modal-file-ready', 'modal-progress'].forEach(id => {
+      ['modal-qr', 'modal-pin-pair', 'modal-text', 'modal-target-picker', 'modal-file-ready', 'modal-progress', 'modal-settings'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.style.display !== 'none') el.style.display = 'none';
       });
@@ -1280,15 +1409,60 @@
     }
   });
 
-  // Rename Device on click self node
-  document.getElementById('self-node').addEventListener('click', async () => {
-    const newName = prompt('Enter a display name for this device:', myInfo.name);
-    if (newName && newName.trim() && newName.trim() !== myInfo.name) {
+  // --- Settings Modal & Sound/Haptics Control ---
+  const modalSettings = document.getElementById('modal-settings');
+  const btnSettings = document.getElementById('btn-settings');
+  const selfNode = document.getElementById('self-node');
+  const inputDeviceName = document.getElementById('setting-device-name');
+  const btnSaveDeviceName = document.getElementById('btn-save-device-name');
+
+  const toggleSound = document.getElementById('setting-sound-enabled');
+  const sliderVolume = document.getElementById('setting-sound-volume');
+  const volumeDisplay = document.getElementById('volume-val-display');
+  const btnTestChime = document.getElementById('btn-test-chime');
+
+  const toggleHaptic = document.getElementById('setting-haptic-enabled');
+  const btnTestHaptic = document.getElementById('btn-test-haptic');
+  const toggleAutoDownload = document.getElementById('setting-auto-download');
+
+  function openSettingsModal() {
+    if (!modalSettings) return;
+
+    // Populate current values
+    if (inputDeviceName) inputDeviceName.value = myInfo.name || '';
+    if (toggleSound) toggleSound.checked = settings.soundEnabled;
+    if (sliderVolume) sliderVolume.value = Math.round(settings.soundVolume * 100);
+    if (volumeDisplay) volumeDisplay.textContent = Math.round(settings.soundVolume * 100) + '%';
+
+    // Highlight active chime button
+    document.querySelectorAll('.chime-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.chime === settings.soundTheme);
+    });
+
+    // Highlight active haptic button
+    if (toggleHaptic) toggleHaptic.checked = settings.hapticEnabled;
+    document.querySelectorAll('.haptic-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.haptic === settings.hapticMode);
+    });
+
+    if (toggleAutoDownload) toggleAutoDownload.checked = settings.autoDownload;
+
+    modalSettings.style.display = 'flex';
+  }
+
+  if (btnSettings) btnSettings.addEventListener('click', openSettingsModal);
+  if (selfNode) selfNode.addEventListener('click', openSettingsModal);
+
+  // Save Device Name
+  if (btnSaveDeviceName && inputDeviceName) {
+    btnSaveDeviceName.addEventListener('click', async () => {
+      const newName = inputDeviceName.value.trim();
+      if (!newName) return;
       try {
         const res = await fetch('/api/me/rename', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: newName.trim() })
+          body: JSON.stringify({ name: newName })
         });
         const data = await res.json();
         if (data.ok) {
@@ -1296,14 +1470,94 @@
           document.getElementById('self-name').textContent = data.name;
           showToast(`Device renamed to "${data.name}"`);
         }
-      } catch (e) {}
-    }
+      } catch (e) {
+        myInfo.name = newName;
+        document.getElementById('self-name').textContent = newName;
+        showToast(`Device renamed to "${newName}"`);
+      }
+    });
+  }
+
+  // Sound Toggle
+  if (toggleSound) {
+    toggleSound.addEventListener('change', () => {
+      settings.soundEnabled = toggleSound.checked;
+      try { localStorage.setItem('omnidrop_sound_enabled', String(settings.soundEnabled)); } catch (e) {}
+      showToast(settings.soundEnabled ? '🔔 Audio Chimes enabled' : '🔕 Audio Chimes muted');
+      if (settings.soundEnabled) playChime('incoming');
+    });
+  }
+
+  // Volume Slider
+  if (sliderVolume && volumeDisplay) {
+    sliderVolume.addEventListener('input', () => {
+      const vol = parseInt(sliderVolume.value, 10);
+      volumeDisplay.textContent = `${vol}%`;
+      settings.soundVolume = vol / 100;
+      try { localStorage.setItem('omnidrop_sound_volume', String(settings.soundVolume)); } catch (e) {}
+    });
+  }
+
+  // Chime Style Buttons (🍏 Apple, 💎 Crystal, 💫 Modern, 👾 Retro)
+  document.querySelectorAll('.chime-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.chime-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const theme = btn.dataset.chime;
+      settings.soundTheme = theme;
+      try { localStorage.setItem('omnidrop_sound_theme', theme); } catch (e) {}
+      // Instant preview chime
+      playChime('incoming');
+    });
   });
 
-  // Settings button
-  document.getElementById('btn-settings').addEventListener('click', () => {
-    document.getElementById('self-node').click();
+  // Test Chime Button
+  if (btnTestChime) {
+    btnTestChime.addEventListener('click', () => {
+      playChime('incoming');
+      setTimeout(() => playChime('success'), 400);
+    });
+  }
+
+  // Haptic Toggle
+  if (toggleHaptic) {
+    toggleHaptic.addEventListener('change', () => {
+      settings.hapticEnabled = toggleHaptic.checked;
+      try { localStorage.setItem('omnidrop_haptic_enabled', String(settings.hapticEnabled)); } catch (e) {}
+      showToast(settings.hapticEnabled ? '📳 Haptic vibration enabled' : '📴 Haptic vibration disabled');
+      if (settings.hapticEnabled) playHaptic('incoming');
+    });
+  }
+
+  // Haptic Mode Buttons (Light, Standard, Strong)
+  document.querySelectorAll('.haptic-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.haptic-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const mode = btn.dataset.haptic;
+      settings.hapticMode = mode;
+      try { localStorage.setItem('omnidrop_haptic_mode', mode); } catch (e) {}
+      // Instant haptic preview
+      playHaptic('incoming');
+    });
   });
+
+  // Test Haptic Button
+  if (btnTestHaptic) {
+    btnTestHaptic.addEventListener('click', () => {
+      playHaptic('incoming');
+      showToast('Felt haptic pulse!');
+    });
+  }
+
+  // Auto-Download Toggle
+  if (toggleAutoDownload) {
+    toggleAutoDownload.addEventListener('change', () => {
+      settings.autoDownload = toggleAutoDownload.checked;
+      try { localStorage.setItem('omnidrop_auto_download', String(settings.autoDownload)); } catch (e) {}
+      showToast(settings.autoDownload ? '⚡ Automatic downloads enabled' : '📥 Manual download prompts enabled');
+    });
+  }
 
   // Global Drag and Drop onto Radar
   const dropzone = document.getElementById('radar-dropzone');
@@ -1341,6 +1595,5 @@
 
   // Boot
   initSelf();
-  updateHistoryBadge();
 })();
 

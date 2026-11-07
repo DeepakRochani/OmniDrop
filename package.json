@@ -9,6 +9,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "desktop": "electron desktop.js",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
     "cap:sync": "npx cap sync",
     "cap:android": "npx cap open android",
     "cap:ios": "npx cap open ios"
