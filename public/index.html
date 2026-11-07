@@ -150,7 +150,9 @@
     <div class="modal-card glass">
       <div class="modal-header">
         <h3>Connect Device</h3>
-        <button class="modal-close" id="btn-close-qr">&times;</button>
+        <button class="modal-close" id="btn-close-qr" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
 
       <!-- Tabs: Local Wi-Fi vs Hotspot -->
@@ -188,7 +190,10 @@
 
   <!-- MODAL: Incoming Transfer Request (AirDrop style) -->
   <div class="modal-backdrop" id="modal-incoming" style="display:none;">
-    <div class="modal-card incoming-card glass">
+    <div class="modal-card incoming-card glass" style="position:relative;">
+      <button class="modal-close" id="btn-close-incoming" aria-label="Close" style="position:absolute;top:16px;right:16px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
       <div class="incoming-pulse">
         <div class="pulse-icon" id="incoming-sender-icon">
           📱
@@ -210,7 +215,10 @@
 
   <!-- MODAL: Active Transfer Progress -->
   <div class="modal-backdrop" id="modal-progress" style="display:none;">
-    <div class="modal-card glass text-center">
+    <div class="modal-card glass text-center" style="position:relative;">
+      <button class="modal-close" id="btn-close-progress" aria-label="Close" style="position:absolute;top:16px;right:16px;" title="Dismiss progress">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
       <h3 id="progress-title">Transferring Files...</h3>
       <p class="progress-sub" id="progress-target">Sending to Galaxy S24</p>
       
@@ -237,7 +245,10 @@
 
   <!-- MODAL: File Received / Ready to Save (Native Mobile / iOS Safari Support) -->
   <div class="modal-backdrop" id="modal-file-ready" style="display:none;">
-    <div class="modal-card glass text-center">
+    <div class="modal-card glass text-center" style="position:relative;">
+      <button class="modal-close" id="btn-close-file-ready" aria-label="Close" style="position:absolute;top:16px;right:16px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
       <div class="incoming-pulse" style="background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 0 30px rgba(16, 185, 129, 0.6);">
         <div class="pulse-icon">📥</div>
       </div>
@@ -263,7 +274,9 @@
     <div class="modal-card glass">
       <div class="modal-header">
         <h3>Share Text or Link</h3>
-        <button class="modal-close" id="btn-close-text">&times;</button>
+        <button class="modal-close" id="btn-close-text" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
       <div class="modal-body">
         <p class="modal-desc">Send text directly to clipboard of nearby device:</p>
@@ -282,7 +295,9 @@
     <div class="modal-card glass text-center">
       <div class="modal-header">
         <h3>Connect by 6-Digit PIN</h3>
-        <button class="modal-close" id="btn-close-pin">&times;</button>
+        <button class="modal-close" id="btn-close-pin" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
       <p class="modal-desc">Type the 6-digit number shown on the other device's screen to connect instantly:</p>
       
@@ -305,7 +320,9 @@
         <h3>Received Files</h3>
         <div class="drawer-header-actions">
           <button class="small-btn glass" id="btn-open-folder">Open Folder</button>
-          <button class="modal-close" id="btn-close-history">&times;</button>
+          <button class="modal-close" id="btn-close-history" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
         </div>
       </div>
       <div class="drawer-body" id="history-list">
@@ -322,7 +339,9 @@
     <div class="modal-card glass">
       <div class="modal-header">
         <h3>Choose Recipient</h3>
-        <button class="modal-close" id="btn-close-picker">&times;</button>
+        <button class="modal-close" id="btn-close-picker" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
       <div class="modal-body">
         <p class="modal-desc">Select which nearby device to send to:</p>

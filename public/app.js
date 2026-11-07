@@ -184,10 +184,17 @@
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
     toast.className = 'toast';
+    toast.style.cursor = 'pointer';
     toast.innerHTML = `<span>${text}</span>`;
+    toast.addEventListener('click', () => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(10px)';
+      setTimeout(() => toast.remove(), 250);
+    });
     container.appendChild(toast);
 
     setTimeout(() => {
+      if (!toast.parentNode) return;
       toast.style.opacity = '0';
       toast.style.transform = 'translateY(10px)';
       toast.style.transition = 'all 0.3s ease';
@@ -792,12 +799,71 @@
     } catch (e) {}
   }
 
+  // --- Universal Modal Backdrop Dismiss & Close Button Handlers ---
+  function setupDismissableModal(modalId, closeBtnId, onDismiss) {
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+
+    const doDismiss = () => {
+      if (onDismiss) {
+        onDismiss();
+      } else {
+        modal.style.display = 'none';
+      }
+    };
+
+    // Close button click with touch-safe handling
+    if (closeBtnId) {
+      const btn = document.getElementById(closeBtnId);
+      if (btn) {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          doDismiss();
+        });
+      }
+    }
+
+    // Tap or click anywhere outside the card on the backdrop to dismiss immediately
+    modal.addEventListener('click', (e) => {
+      if (!e.target.closest('.modal-card') && !e.target.closest('.drawer-panel')) {
+        e.stopPropagation();
+        doDismiss();
+      }
+    });
+  }
+
+  // Register all modals for effortless dismissal
+  setupDismissableModal('modal-qr', 'btn-close-qr');
+  setupDismissableModal('modal-pin-pair', 'btn-close-pin');
+  setupDismissableModal('modal-text', 'btn-close-text');
+  setupDismissableModal('modal-target-picker', 'btn-close-picker');
+  setupDismissableModal('drawer-history', 'btn-close-history');
+  setupDismissableModal('modal-file-ready', 'btn-close-file-ready');
+  setupDismissableModal('modal-progress', 'btn-close-progress');
+  setupDismissableModal('modal-incoming', 'btn-close-incoming', () => {
+    const btnDecline = document.getElementById('btn-incoming-decline');
+    if (btnDecline) btnDecline.click();
+  });
+
+  // Global Escape key dismiss for physical keyboards (Mac/PC/iPad)
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      ['modal-qr', 'modal-pin-pair', 'modal-text', 'modal-target-picker', 'drawer-history', 'modal-file-ready', 'modal-progress'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && el.style.display !== 'none') el.style.display = 'none';
+      });
+      const incoming = document.getElementById('modal-incoming');
+      if (incoming && incoming.style.display !== 'none') {
+        const btnDecline = document.getElementById('btn-incoming-decline');
+        if (btnDecline) btnDecline.click();
+      }
+    }
+  });
+
   // --- Buttons & Event Handlers ---
   document.getElementById('btn-show-qr').addEventListener('click', () => {
     document.getElementById('modal-qr').style.display = 'flex';
-  });
-  document.getElementById('btn-close-qr').addEventListener('click', () => {
-    document.getElementById('modal-qr').style.display = 'none';
   });
 
   document.getElementById('btn-copy-url').addEventListener('click', () => {
@@ -809,9 +875,6 @@
   document.getElementById('btn-history').addEventListener('click', () => {
     loadReceivedHistory();
     document.getElementById('drawer-history').style.display = 'flex';
-  });
-  document.getElementById('btn-close-history').addEventListener('click', () => {
-    document.getElementById('drawer-history').style.display = 'none';
   });
 
   document.getElementById('btn-open-folder').addEventListener('click', () => {
