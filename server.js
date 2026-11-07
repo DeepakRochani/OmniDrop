@@ -241,8 +241,35 @@ const MIME_TYPES = {
   '.json': 'application/json',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
   '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon'
+  '.ico': 'image/x-icon',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.wav': 'audio/wav',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.txt': 'text/plain; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.zip': 'application/zip',
+  '.tar': 'application/x-tar',
+  '.gz': 'application/gzip'
 };
 
 function serveStatic(req, res, pathname) {
@@ -388,6 +415,9 @@ function handleRequest(req, res) {
 
       // Add both to peers
       if (sender) {
+        if (!sender.ip || sender.ip === 'undefined') {
+          sender.ip = req.socket.remoteAddress.replace(/^.*:/, '') || 'Connected';
+        }
         peers.set(sender.id, sender);
         if (sender.pin) {
           pinToDevice.set(sender.pin, sender);
@@ -628,7 +658,8 @@ function handleRequest(req, res) {
         status: 'pending',
         transferredBytes: 0,
         createdAt: Date.now(),
-        resolveAccept: resolveAcceptance
+        resolveAccept: resolveAcceptance,
+        savedFiles: []
       });
 
       const reqPayload = {
@@ -773,8 +804,12 @@ function handleRequest(req, res) {
         path: savePath,
         sha256: fileSha256,
         receivedAt: Date.now(),
-        sender: transfer.sender ? transfer.sender.name : 'Nearby Peer'
+        sender: transfer.sender ? transfer.sender.name : 'Nearby Peer',
+        downloadUrl: `/api/download/${encodeURIComponent(path.basename(savePath))}`
       };
+      if (!transfer.savedFiles) transfer.savedFiles = [];
+      transfer.savedFiles.push(record);
+
       receivedFilesHistory.unshift(record);
       if (receivedFilesHistory.length > 50) receivedFilesHistory.pop();
 
@@ -782,23 +817,25 @@ function handleRequest(req, res) {
       const isAllComplete = (fileIndex === transfer.files.length - 1) || (transfer.transferredBytes >= transfer.totalSize);
 
       if (isAllComplete) {
-        broadcastSSE('transfer_complete', {
+        const completeData = {
           transferId,
           totalFiles: transfer.files.length,
           totalSize: transfer.totalSize,
+          formattedSize: formatBytes(transfer.totalSize),
           savedDirectory: DOWNLOADS_DIR,
+          sender: transfer.sender ? transfer.sender.name : 'Nearby Device',
+          senderId: transfer.sender ? transfer.sender.id : null,
+          targetId: transfer.targetId,
+          savedFiles: transfer.savedFiles,
           lastFile: record
-        });
+        };
 
-        // If target was a mobile/web client (e.g. iPhone Safari), tell them the file is ready to download!
-        if (transfer.targetId && transfer.targetId !== deviceId) {
-          sendSSEToClient(transfer.targetId, 'file_ready_for_download', {
-            transferId: transferId,
-            fileName: record.name,
-            downloadUrl: `/api/download/${encodeURIComponent(record.name)}`,
-            formattedSize: record.formattedSize,
-            sender: transfer.sender ? transfer.sender.name : 'Nearby Device'
-          });
+        // Broadcast to all participants (sender & receiver)
+        broadcastSSE('transfer_complete', completeData);
+
+        // Also specifically send file_ready_for_download event to target recipient
+        if (transfer.targetId) {
+          sendSSEToClient(transfer.targetId, 'file_ready_for_download', completeData);
         }
 
         activeTransfers.delete(transferId);
@@ -834,10 +871,16 @@ function handleRequest(req, res) {
     }
 
     const stat = fs.statSync(safePath);
+    const ext = path.extname(safePath).toLowerCase();
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    const cleanBaseName = path.basename(safePath);
+    const encodedName = encodeURIComponent(cleanBaseName);
+
     res.writeHead(200, {
-      'Content-Disposition': `attachment; filename="${path.basename(safePath)}"`,
-      'Content-Type': 'application/octet-stream',
-      'Content-Length': stat.size
+      'Content-Disposition': `attachment; filename="${cleanBaseName}"; filename*=UTF-8''${encodedName}`,
+      'Content-Type': contentType,
+      'Content-Length': stat.size,
+      'Cache-Control': 'no-cache'
     });
     fs.createReadStream(safePath).pipe(res);
     return;

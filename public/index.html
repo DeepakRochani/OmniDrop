@@ -235,6 +235,29 @@
     </div>
   </div>
 
+  <!-- MODAL: File Received / Ready to Save (Native Mobile / iOS Safari Support) -->
+  <div class="modal-backdrop" id="modal-file-ready" style="display:none;">
+    <div class="modal-card glass text-center">
+      <div class="incoming-pulse" style="background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 0 30px rgba(16, 185, 129, 0.6);">
+        <div class="pulse-icon">📥</div>
+      </div>
+      <h3>File Received!</h3>
+      <p class="modal-desc" id="file-ready-desc">Ready to save to your device.</p>
+      
+      <div style="background:rgba(255,255,255,0.06);padding:14px;border-radius:12px;margin:16px 0;border:1px solid rgba(255,255,255,0.1);">
+        <div id="file-ready-name" style="font-weight:600;font-size:15px;word-break:break-all;">filename.jpg</div>
+        <div id="file-ready-size" style="font-size:12px;color:var(--text-muted);margin-top:4px;">0 MB</div>
+      </div>
+
+      <div style="display:flex;gap:10px;">
+        <button class="btn-decline" id="btn-file-ready-close">Close</button>
+        <a id="file-ready-download-link" href="#" download class="primary-btn" style="text-decoration:none;display:flex;align-items:center;justify-content:center;">
+          <span>Save File</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
   <!-- MODAL: Instant Text Share -->
   <div class="modal-backdrop" id="modal-text" style="display:none;">
     <div class="modal-card glass">

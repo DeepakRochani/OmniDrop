@@ -18,10 +18,12 @@
 
   const peersMap = new Map(); // id -> peer object
   let pendingIncomingTransfer = null;
+  let activeIncomingTransfer = null;
   let activeOutgoingTransfer = null;
   let selectedFilesToSend = [];
   let currentTargetPeer = null;
   let eventSource = null;
+  const completedTransfers = new Set();
 
   // Audio Context for AirDrop Chimes (Zero external audio file needed!)
   let audioCtx = null;
@@ -325,22 +327,10 @@
       onTransferComplete(comp);
     });
 
-    // File ready for download (for mobile/web clients receiving a file)
+    // File ready for download (sent specifically to recipient client)
     eventSource.addEventListener('file_ready_for_download', e => {
-      const data = JSON.parse(e.data);
-      playChime('success');
-      showToast(`📥 Received ${data.fileName} (${data.formattedSize})!`);
-      
-      // Auto-trigger browser download or open
-      const a = document.createElement('a');
-      a.href = data.downloadUrl;
-      a.download = data.fileName;
-      a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => a.remove(), 1000);
-
-      updateHistoryBadge();
+      const comp = JSON.parse(e.data);
+      handleIncomingFilesComplete(comp);
     });
 
     // Received instant text/clipboard
@@ -403,7 +393,7 @@
           <span class="peer-badge">${getOsBadge(peer.os)}</span>
         </div>
         <span class="peer-name">${peer.name}</span>
-        <span class="peer-sub">${peer.ip}</span>
+        <span class="peer-sub">${peer.ip && peer.ip !== 'undefined' ? peer.ip : (peer.pin ? 'PIN: ' + peer.pin : 'Nearby')}</span>
       `;
 
       // Click to send files or text
@@ -600,6 +590,12 @@
   // Receiver clicks Accept
   document.getElementById('btn-incoming-accept').addEventListener('click', async () => {
     if (!pendingIncomingTransfer) return;
+    activeIncomingTransfer = {
+      transferId: pendingIncomingTransfer.transferId,
+      sender: pendingIncomingTransfer.sender,
+      files: pendingIncomingTransfer.files
+    };
+    const currentTransfer = pendingIncomingTransfer;
     document.getElementById('modal-incoming').style.display = 'none';
 
     try {
@@ -607,14 +603,14 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transferId: pendingIncomingTransfer.transferId,
+          transferId: currentTransfer.transferId,
           accepted: true
         })
       });
 
       // Show progress modal
       document.getElementById('progress-title').textContent = 'Receiving Files...';
-      document.getElementById('progress-target').textContent = `From ${pendingIncomingTransfer.sender.name}`;
+      document.getElementById('progress-target').textContent = `From ${currentTransfer.sender.name}`;
       document.getElementById('modal-progress').style.display = 'flex';
     } catch (e) {}
   });
@@ -646,11 +642,98 @@
     document.getElementById('progress-ring-fill').style.strokeDashoffset = offset;
   }
 
-  function onTransferComplete(comp) {
-    playChime('success');
+  // --- Zero-Click Automatic File Downloader ---
+  function triggerAutoDownload(url, filename) {
+    if (!url) return;
+
+    // Method 1: Invisible HTML5 anchor with download attribute
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'download';
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        if (a.parentNode) a.parentNode.removeChild(a);
+      }, 2000);
+    } catch (err) {
+      console.warn('Anchor auto-download failed:', err);
+    }
+
+    // Method 2: iOS Safari WebKit iframe fallback
+    const ua = navigator.userAgent || '';
+    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (isIOS) {
+      try {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = url;
+        document.body.appendChild(iframe);
+        setTimeout(() => {
+          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+        }, 30000);
+      } catch (e) {}
+    }
+  }
+
+  function handleIncomingFilesComplete(comp) {
+    if (!comp || !comp.transferId) return;
+    if (completedTransfers.has(comp.transferId)) return;
+    completedTransfers.add(comp.transferId);
+
+    // Close progress modal
     document.getElementById('modal-progress').style.display = 'none';
-    showToast(`✅ Transfer Complete! Saved ${comp.totalFiles} file(s).`);
+    playChime('success');
+
+    const files = (comp.savedFiles && comp.savedFiles.length > 0)
+      ? comp.savedFiles
+      : (comp.lastFile ? [comp.lastFile] : (comp.downloadUrl ? [comp] : []));
+
+    const totalCount = files.length || comp.totalFiles || 1;
+    const displayName = files[0] ? (files[0].originalName || files[0].name || comp.fileName) : 'file';
+
+    const isHost = (myInfo.isHost || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+    if (isHost) {
+      showToast(`✅ Received ${totalCount > 1 ? totalCount + ' files' : displayName}! Saved directly to Downloads.`, 4500);
+    } else {
+      showToast(`✅ Received ${totalCount > 1 ? totalCount + ' files' : displayName}! Downloading automatically...`, 4500);
+    }
+
+    // Direct automatic download of all files - ZERO manual clicks needed!
+    files.forEach((file, index) => {
+      setTimeout(() => {
+        const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || file.fileName)}`;
+        const name = file.name || file.fileName;
+        triggerAutoDownload(url, name);
+      }, index * 300);
+    });
+
     updateHistoryBadge();
+  }
+
+  function onTransferComplete(comp) {
+    document.getElementById('modal-progress').style.display = 'none';
+
+    const isSender = (activeOutgoingTransfer && activeOutgoingTransfer.transferId === comp.transferId)
+      || (comp.senderId && comp.senderId === (myInfo.id || myClientId));
+
+    const isReceiver = (activeIncomingTransfer && activeIncomingTransfer.transferId === comp.transferId)
+      || (comp.targetId && (comp.targetId === myInfo.id || comp.targetId === myClientId));
+
+    if (isReceiver || (!isSender && activeIncomingTransfer)) {
+      activeIncomingTransfer = null;
+      handleIncomingFilesComplete(comp);
+    } else if (isSender) {
+      activeOutgoingTransfer = null;
+      playChime('success');
+      showToast(`🎉 Sent ${comp.totalFiles || 1} file(s) successfully!`);
+    } else {
+      handleIncomingFilesComplete(comp);
+    }
   }
 
   // --- Recent Received History Drawer ---
@@ -669,9 +752,9 @@
         <div class="history-item">
           <div>
             <div class="history-title" title="${item.name}">${item.name}</div>
-            <div class="history-sub">${item.formattedSize} &bull; from ${item.sender}</div>
+            <div class="history-sub">${item.formattedSize} &bull; from ${item.sender} &bull; <span style="color:#10b981;font-weight:600;">Saved</span></div>
           </div>
-          <a href="/api/download/${encodeURIComponent(item.name)}" download class="history-action-btn">Download</a>
+          <a href="/api/download/${encodeURIComponent(item.name)}" download class="history-action-btn" title="Download another copy">Download</a>
         </div>
       `).join('');
     } catch (e) {}
@@ -827,6 +910,21 @@
   document.getElementById('btn-close-picker').addEventListener('click', () => {
     document.getElementById('modal-target-picker').style.display = 'none';
   });
+
+  const btnFileReadyClose = document.getElementById('btn-file-ready-close');
+  if (btnFileReadyClose) {
+    btnFileReadyClose.addEventListener('click', () => {
+      document.getElementById('modal-file-ready').style.display = 'none';
+    });
+  }
+  const dlLink = document.getElementById('file-ready-download-link');
+  if (dlLink) {
+    dlLink.addEventListener('click', () => {
+      setTimeout(() => {
+        document.getElementById('modal-file-ready').style.display = 'none';
+      }, 600);
+    });
+  }
 
   // --- Reusable Direct 6-Digit Pair Function ---
   async function directPairByPin(pin) {
