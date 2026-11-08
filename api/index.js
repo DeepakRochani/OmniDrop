@@ -96,13 +96,16 @@ module.exports = async (req, res) => {
   const url = new URL(rawPath, `http://${req.headers.host || 'localhost'}`);
   const pathname = url.pathname;
 
-  // 1. Health check / Info
-  if (pathname.includes('/health') || req.url.includes('/health')) {
+  // 1. Health check & Debug Info
+  if (req.url.includes('debug') || req.url.includes('health') || (req.headers['x-matched-path'] && req.headers['x-matched-path'].includes('health'))) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
       service: 'OmniDrop WebRTC Signaling Serverless',
-      pathname
+      url: req.url,
+      matchedPath: req.headers['x-matched-path'],
+      vercelMatchedPath: req.headers['x-vercel-matched-path'],
+      headers: req.headers
     }));
     return;
   }
