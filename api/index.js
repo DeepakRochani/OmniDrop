@@ -94,24 +94,24 @@ module.exports = async (req, res) => {
 
   const rawPath = req.headers['x-matched-path'] || req.headers['x-vercel-matched-path'] || req.headers['x-forwarded-uri'] || req.url;
   const url = new URL(rawPath, `http://${req.headers.host || 'localhost'}`);
-  const pathname = url.pathname;
+  const slugPath = req.query && req.query.slug ? '/' + [].concat(req.query.slug).join('/') : '';
+  const routeParam = url.searchParams.get('route') || (new URL(req.url, 'http://localhost').searchParams.get('route')) || '';
+  const fullPath = `${slugPath} ${routeParam} ${url.pathname} ${req.url}`;
 
-  // 1. Health check & Debug Info
-  if (req.url.includes('debug') || req.url.includes('health') || (req.headers['x-matched-path'] && req.headers['x-matched-path'].includes('health'))) {
+  // 1. Health check & Diagnostics
+  if (fullPath.includes('/health') || fullPath.includes('health') || fullPath.includes('debug')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
       service: 'OmniDrop WebRTC Signaling Serverless',
-      url: req.url,
-      matchedPath: req.headers['x-matched-path'],
-      vercelMatchedPath: req.headers['x-vercel-matched-path'],
-      headers: req.headers
+      fullPath,
+      reqUrl: req.url
     }));
     return;
   }
 
   // 2. Create Room API (POST /api/room/create)
-  if (req.method === 'POST' && (pathname.includes('/room/create') || req.url.includes('/room/create'))) {
+  if (req.method === 'POST' && fullPath.includes('room/create')) {
     const data = await parseJsonBody(req).catch(() => ({}));
     let code;
     do {
@@ -130,7 +130,7 @@ module.exports = async (req, res) => {
   }
 
   // 3. Join Room API (POST /api/room/join)
-  if (req.method === 'POST' && (pathname.includes('/room/join') || req.url.includes('/room/join'))) {
+  if (req.method === 'POST' && fullPath.includes('room/join')) {
     try {
       const data = await parseJsonBody(req);
       const { roomCode, peer } = data;
@@ -163,7 +163,7 @@ module.exports = async (req, res) => {
   }
 
   // 4. Dispatch Signal API (POST /api/room/signal)
-  if (req.method === 'POST' && (pathname.includes('/room/signal') || req.url.includes('/room/signal'))) {
+  if (req.method === 'POST' && fullPath.includes('room/signal')) {
     try {
       const data = await parseJsonBody(req);
       const { toId, fromId, signal, roomCode } = data;
@@ -181,7 +181,7 @@ module.exports = async (req, res) => {
   }
 
   // 5. Poll Signals API (GET /api/room/signals)
-  if (req.method === 'GET' && (pathname.includes('/room/signals') || req.url.includes('/room/signals'))) {
+  if (req.method === 'GET' && fullPath.includes('room/signals')) {
     const parsedQuery = new URL(req.url, 'http://localhost');
     const clientId = parsedQuery.searchParams.get('clientId') || url.searchParams.get('clientId');
     if (!clientId) {
@@ -198,5 +198,5 @@ module.exports = async (req, res) => {
   }
 
   // 6. Static frontend files fallback (/, /style.css, /app.js, /manifest.json, etc.)
-  serveStatic(req, res, pathname);
+  serveStatic(req, res, url.pathname);
 };
