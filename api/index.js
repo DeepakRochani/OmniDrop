@@ -36,7 +36,7 @@ function getClientIp(req) {
   return req.socket?.remoteAddress || '127.0.0.1';
 }
 
-// IP comparison helper for IPv4 and IPv6 subnets
+// IP comparison helper for exact matching (same Wi-Fi router / NAT or IPv6 prefix)
 function isIpMatch(ip1, ip2) {
   if (!ip1 || !ip2) return false;
   if (ip1 === ip2) return true;
@@ -52,13 +52,6 @@ function isIpMatch(ip1, ip2) {
     if (p1 && p1 === p2) return true;
   }
 
-  // IPv4 /24 subnet comparison (first 3 octets: e.g. 192.168.1.x or public ISP subnet)
-  if (c1.includes('.') && c2.includes('.')) {
-    const p1 = c1.split('.').slice(0, 3).join('.');
-    const p2 = c2.split('.').slice(0, 3).join('.');
-    if (p1 && p1 === p2) return true;
-  }
-
   return false;
 }
 
@@ -66,15 +59,15 @@ function isIpMatch(ip1, ip2) {
 function arePeersInSameNetwork(p1, p2, clientIp) {
   if (!p1 || !p2) return false;
 
-  // 1. Direct Public IP / Subnet Match
+  // 1. Exact Public IP Match (devices behind the same home/office Wi-Fi router)
   const ip1 = p1.ip || clientIp;
   const ip2 = p2.ip;
   if (ip1 && ip2 && ip1 !== '127.0.0.1' && isIpMatch(ip1, ip2)) {
     return true;
   }
 
-  // 2. Local LAN IP Match (e.g. both reporting 192.168.1.x)
-  if (p1.localLanIp && p2.localLanIp && isIpMatch(p1.localLanIp, p2.localLanIp)) {
+  // 2. Local LAN IP Match along with public IP match
+  if (ip1 && ip2 && isIpMatch(ip1, ip2) && p1.localLanIp && p2.localLanIp && p1.localLanIp === p2.localLanIp) {
     return true;
   }
 
@@ -336,8 +329,9 @@ module.exports = async (req, res) => {
       for (const [pid, p] of room.peers.entries()) {
         if (pid === clientId) continue;
         if (seen.has(pid)) continue;
-        if (p.id && (p.id.startsWith('omni_') || p.id === 'cloud_node')) continue; // Ignore cloud server nodes
-        if (p.name && p.name.includes('Cloud Node')) continue;
+        if (p.id && (p.id.startsWith('omni_') || p.id === 'cloud_node' || p.id.includes('cloud'))) continue;
+        if (p.name && (p.name.includes('Cloud') || p.name.includes('Relay') || p.name.includes('OmniDrop Cloud'))) continue;
+        if (p.deviceType === 'cloud') continue;
 
         const isRecentlyActive = (p.lastSeen || p.createdAt || 0) > activeCutoff;
         if (!isRecentlyActive) continue;

@@ -456,6 +456,18 @@
     sessionStorage.setItem('omnidrop_client_id', myClientId);
   } catch (e) {}
 
+  // Helper to distinguish true cloud serverless deployment (Vercel) from local Node.js network server
+  function isCloudServerlessEnv() {
+    const host = window.location.hostname;
+    const port = window.location.port;
+    if (host === 'localhost' || host === '127.0.0.1') return false;
+    if (port === '53317' || port === '3000' || port === '8080') return false;
+    if (host.startsWith('192.168.') || host.startsWith('10.') || host.startsWith('172.') || host.endsWith('.local')) {
+      return false;
+    }
+    return true; // True only for public cloud serverless instances (e.g. omni-drop-iota.vercel.app)
+  }
+
   // --- Worldwide WebRTC P2P Configuration & State ---
   const RTC_CONFIG = {
     iceServers: [
@@ -490,7 +502,7 @@
     const quickCodeEl = document.getElementById('quick-my-code');
     if (quickCodeEl) quickCodeEl.textContent = pin;
 
-    const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+    const isRemoteClient = isCloudServerlessEnv();
     const hostUrl = isRemoteClient
       ? `${window.location.origin}/?room=${pin}`
       : `http://${myInfo.ip || '127.0.0.1'}:${myInfo.port || 53317}/?pair=${pin}`;
@@ -524,6 +536,8 @@
       console.log(`[PeerJS] Initializing broker with ID: ${targetId}`);
       myPeer = new Peer(targetId, {
         debug: 1,
+        secure: window.location.protocol === 'https:',
+        port: window.location.protocol === 'https:' ? 443 : 80,
         config: RTC_CONFIG
       });
 
@@ -834,8 +848,7 @@
 
   // Persistent registration with host (preserves device identity, name and PIN across screen locks)
   async function registerWithHost() {
-    const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
-    if (!isRemoteClient) return;
+    if (!isCloudServerlessEnv()) return;
 
     try {
       const { clientOS, clientType } = detectClientDevice();
@@ -876,7 +889,7 @@
   async function initSelf() {
     detectLocalLanIp();
     const { clientOS, clientType } = detectClientDevice();
-    const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+    const isRemoteClient = isCloudServerlessEnv();
 
     // 1. Guaranteed Instant 6-digit PIN (Zero Waiting, Never stuck on "------")
     let persistentPin = '';
@@ -1124,9 +1137,9 @@
         }
         peersMap.set(peer.id, peer);
 
-        // Auto-connect WebRTC DataChannel for discovered remote/cloud peers
-        const isRemoteEnv = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
-        if (isRemoteEnv || peer.isWebRTC || peer.isRemote) {
+        // Auto-connect WebRTC DataChannel for discovered remote/cloud peers (Cloud serverless only)
+        const isCloud = isCloudServerlessEnv();
+        if (isCloud && (peer.isWebRTC || peer.isRemote || isCloud)) {
           peer.isWebRTC = true;
           peer.isRemote = true;
           if (peer.pin) {
@@ -1136,7 +1149,7 @@
           const targetRoom = peer.roomCode || peer.pin || currentRemoteRoomCode;
           // Glare-free negotiation: device with lexicographically smaller ID initiates offer
           const shouldInitiate = myId < peer.id;
-          if (!webrtcConnections.has(peer.id) && !peerJSConnections.has('od_' + peer.pin)) {
+          if (!webrtcConnections.has(peer.id)) {
             createWebRTCPeerConnection(peer.id, peer, targetRoom, shouldInitiate);
           }
         }
@@ -1432,10 +1445,10 @@
   async function initiateSendFiles(targetPeer, files) {
     if (!files || files.length === 0) return;
 
-    const isRemoteEnv = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+    const isCloud = isCloudServerlessEnv();
 
-    // Check if target is connected via WebRTC P2P (Worldwide Remote or Cloud Vercel)
-    if (targetPeer.isWebRTC || webrtcConnections.has(targetPeer.id) || isRemoteEnv) {
+    // Check if target is connected via WebRTC P2P (ONLY for Cloud Vercel serverless environment)
+    if (isCloud && (targetPeer.isWebRTC || targetPeer.isRemote || webrtcConnections.has(targetPeer.id))) {
       targetPeer.isWebRTC = true;
       targetPeer.isRemote = true;
       const targetPeerId = targetPeer.peerId || (targetPeer.pin ? ('od_' + targetPeer.pin) : targetPeer.id);
@@ -1449,12 +1462,14 @@
         if (targetPeer.pin) pendingSendFilesQueue.set('od_' + targetPeer.pin, { targetPeer, files });
         if (targetPeerId) pendingSendFilesQueue.set(targetPeerId, { targetPeer, files });
 
-        // Connect via PeerJS broker for guaranteed instant WebRTC connection
-        let pConn = connectPeerViaPeerJS(targetPeer);
-        if (!pConn && !conn) {
-          const roomCode = targetPeer.roomCode || targetPeer.pin || currentRemoteRoomCode;
+        // Connect via built-in WebRTC signaling
+        const roomCode = targetPeer.roomCode || targetPeer.pin || currentRemoteRoomCode;
+        if (!conn || !conn.pc || conn.pc.connectionState === 'failed' || conn.pc.connectionState === 'closed') {
           conn = createWebRTCPeerConnection(targetPeer.id, targetPeer, roomCode, true);
         }
+
+        // Also try PeerJS if available
+        connectPeerViaPeerJS(targetPeer);
 
         showToast(`🔒 Connecting direct P2P link to ${targetPeer.name}... Transfer will start automatically!`);
 
@@ -2880,7 +2895,49 @@
 
     showToast(`🔍 Connecting to PIN #${cleanPin}...`);
 
-    // 1. PeerJS direct connection to od_XXXXXX (instant, bypasses Vercel multi-container limits)
+    const isCloud = isCloudServerlessEnv();
+
+    // 1. Local Network: Pair instantly via local Node.js server (2ms, direct RAM pairing)
+    if (!isCloud) {
+      try {
+        const res = await fetch('/api/pair-by-pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pin: cleanPin,
+            sender: {
+              id: myInfo.id || myClientId,
+              name: myInfo.name,
+              os: myInfo.os,
+              deviceType: myInfo.deviceType,
+              pin: myInfo.pin,
+              localLanIp: myInfo.localLanIp || undefined
+            }
+          })
+        });
+
+        const data = await res.json();
+        const targetPeer = data.peer || data.target;
+        if (data.ok && targetPeer) {
+          peersMap.set(targetPeer.id, targetPeer);
+          renderRadarPeers();
+          playChime('incoming');
+          showToast(`✨ Connected to ${targetPeer.name}! Tap avatar to send.`);
+          const modalPinPair = document.getElementById('modal-pin-pair');
+          if (modalPinPair) modalPinPair.style.display = 'none';
+          const qrModal = document.getElementById('modal-qr');
+          if (qrModal) qrModal.style.display = 'none';
+          return true;
+        } else if (data.error) {
+          showToast(`⚠️ ${data.error}`);
+          return false;
+        }
+      } catch (err) {
+        console.warn('Local PIN pair error:', err);
+      }
+    }
+
+    // 2. Cloud Serverless Mode (Vercel): Try PeerJS broker then built-in WebRTC signaling room
     if (typeof Peer !== 'undefined') {
       if (!myPeer || myPeer.destroyed) {
         initPeerJS(myInfo.pin);
@@ -2900,7 +2957,7 @@
         if (conn) {
           const success = await new Promise((resolve) => {
             if (conn.open) return resolve(true);
-            const t = setTimeout(() => resolve(false), 4500);
+            const t = setTimeout(() => resolve(false), 2500);
             conn.once('open', () => {
               clearTimeout(t);
               resolve(true);
@@ -2925,7 +2982,7 @@
       }
     }
 
-    // 2. Serverless API / HTTP pairing fallback
+    // 3. Built-in WebRTC room signaling fallback
     try {
       const res = await fetch('/api/pair-by-pin', {
         method: 'POST',
@@ -2949,25 +3006,18 @@
       if (data.ok && targetPeer) {
         peersMap.set(targetPeer.id, targetPeer);
         renderRadarPeers();
-        playChime('incoming');
-        showToast(`✨ Connected to ${targetPeer.name}! Tap avatar to send.`);
-        const modalPinPair = document.getElementById('modal-pin-pair');
-        if (modalPinPair) modalPinPair.style.display = 'none';
-        if (!window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')) {
-          joinRemoteRoom(cleanPin);
-        }
-        return true;
       }
     } catch (err) {
-      console.warn('Local PIN pair attempt:', err);
+      console.warn('Pair-by-pin error:', err);
     }
 
-    // 3. Worldwide WebRTC Room fallback
-    try {
-      const remoteJoined = await joinRemoteRoom(cleanPin);
-      if (remoteJoined) return true;
-    } catch (err) {
-      console.warn('Worldwide room PIN join attempt:', err);
+    const joined = await joinRemoteRoom(cleanPin);
+    if (joined) {
+      const modalPinPair = document.getElementById('modal-pin-pair');
+      if (modalPinPair) modalPinPair.style.display = 'none';
+      const qrModal = document.getElementById('modal-qr');
+      if (qrModal) qrModal.style.display = 'none';
+      return true;
     }
 
     showToast(`❌ Device with PIN #${cleanPin} not found or offline.`);
