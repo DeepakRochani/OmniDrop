@@ -2,7 +2,7 @@
   "name": "omni-airdrop",
   "version": "1.0.0",
   "description": "Universal Cross-Platform AirDrop for Android, iOS, Windows, Mac, Linux, and Tablets",
-  "main": "server.js",
+  "main": "api/index.js",
   "bin": {
     "omnidrop": "bin/omnidrop.js"
   },

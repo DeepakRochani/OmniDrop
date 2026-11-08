@@ -1242,4 +1242,8 @@ function listen(port) {
   });
 }
 
-listen(DEFAULT_PORT);
+if (require.main === module) {
+  listen(DEFAULT_PORT);
+}
+
+module.exports = (req, res) => handleRequest(req, res);

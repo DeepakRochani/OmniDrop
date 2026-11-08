@@ -43,6 +43,13 @@ module.exports = async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = url.pathname;
 
+  // Health check / Info
+  if (pathname === '/api' || pathname === '/api/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, service: 'OmniDrop WebRTC Signaling Serverless' }));
+    return;
+  }
+
   // 1. Create Room
   if (req.method === 'POST' && (pathname === '/api/room/create' || pathname.endsWith('/room/create'))) {
     const data = await parseJsonBody(req).catch(() => ({}));
