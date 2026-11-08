@@ -92,24 +92,32 @@ module.exports = async (req, res) => {
 
   cleanupExpired();
 
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const rawPath = req.headers['x-matched-path'] || req.headers['x-vercel-matched-path'] || req.headers['x-forwarded-uri'] || req.url;
+  const url = new URL(rawPath, `http://${req.headers.host || 'localhost'}`);
   const pathname = url.pathname;
 
-  // 1. Static frontend assets (if not /api/*)
-  if (!pathname.startsWith('/api')) {
+  // 1. Health check / Info
+  if (pathname === '/api' || pathname === '/api/health' || pathname.endsWith('/health') || req.url.includes('health')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ok: true,
+      service: 'OmniDrop WebRTC Signaling Serverless',
+      reqUrl: req.url,
+      xMatchedPath: req.headers['x-matched-path'],
+      xForwardedUri: req.headers['x-forwarded-uri'],
+      pathname
+    }));
+    return;
+  }
+
+  // 2. Static frontend assets (if not /api/*)
+  if (!pathname.startsWith('/api') && !req.url.startsWith('/api')) {
     serveStatic(req, res, pathname);
     return;
   }
 
-  // 2. Health check / Info
-  if (pathname === '/api' || pathname === '/api/health' || pathname.endsWith('/health') || pathname.endsWith('/api')) {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, service: 'OmniDrop WebRTC Signaling Serverless', path: pathname }));
-    return;
-  }
-
   // 3. Create Room
-  if (req.method === 'POST' && (pathname === '/api/room/create' || pathname.endsWith('/room/create'))) {
+  if (req.method === 'POST' && (pathname.includes('/room/create') || req.url.includes('/room/create'))) {
     const data = await parseJsonBody(req).catch(() => ({}));
     let code;
     do {
@@ -128,7 +136,7 @@ module.exports = async (req, res) => {
   }
 
   // 4. Join Room
-  if (req.method === 'POST' && (pathname === '/api/room/join' || pathname.endsWith('/room/join'))) {
+  if (req.method === 'POST' && (pathname.includes('/room/join') || req.url.includes('/room/join'))) {
     try {
       const data = await parseJsonBody(req);
       const { roomCode, peer } = data;
@@ -161,7 +169,7 @@ module.exports = async (req, res) => {
   }
 
   // 5. Dispatch Signal (Offer / Answer / ICE Candidate)
-  if (req.method === 'POST' && (pathname === '/api/room/signal' || pathname.endsWith('/room/signal'))) {
+  if (req.method === 'POST' && (pathname.includes('/room/signal') || req.url.includes('/room/signal'))) {
     try {
       const data = await parseJsonBody(req);
       const { toId, fromId, signal, roomCode } = data;
@@ -179,8 +187,8 @@ module.exports = async (req, res) => {
   }
 
   // 6. Poll Signals (for serverless Vercel clients)
-  if (req.method === 'GET' && (pathname === '/api/room/signals' || pathname.endsWith('/room/signals'))) {
-    const clientId = url.searchParams.get('clientId');
+  if (req.method === 'GET' && (pathname.includes('/room/signals') || req.url.includes('/room/signals'))) {
+    const clientId = url.searchParams.get('clientId') || new URL(req.url, 'http://localhost').searchParams.get('clientId');
     if (!clientId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Missing clientId query parameter' }));
