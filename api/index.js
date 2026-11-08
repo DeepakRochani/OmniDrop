@@ -62,8 +62,8 @@ function serveStatic(req, res, pathname) {
 
   fs.stat(safePath, (err, stats) => {
     if (err || !stats.isFile()) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('File Not Found');
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'File Not Found', path: relativePath }));
       return;
     }
 
@@ -97,26 +97,17 @@ module.exports = async (req, res) => {
   const pathname = url.pathname;
 
   // 1. Health check / Info
-  if (pathname === '/api' || pathname === '/api/health' || pathname.endsWith('/health') || req.url.includes('health')) {
+  if (pathname.includes('/health') || req.url.includes('/health')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
       service: 'OmniDrop WebRTC Signaling Serverless',
-      reqUrl: req.url,
-      xMatchedPath: req.headers['x-matched-path'],
-      xForwardedUri: req.headers['x-forwarded-uri'],
       pathname
     }));
     return;
   }
 
-  // 2. Static frontend assets (if not /api/*)
-  if (!pathname.startsWith('/api') && !req.url.startsWith('/api')) {
-    serveStatic(req, res, pathname);
-    return;
-  }
-
-  // 3. Create Room
+  // 2. Create Room API (POST /api/room/create)
   if (req.method === 'POST' && (pathname.includes('/room/create') || req.url.includes('/room/create'))) {
     const data = await parseJsonBody(req).catch(() => ({}));
     let code;
@@ -135,7 +126,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 4. Join Room
+  // 3. Join Room API (POST /api/room/join)
   if (req.method === 'POST' && (pathname.includes('/room/join') || req.url.includes('/room/join'))) {
     try {
       const data = await parseJsonBody(req);
@@ -168,7 +159,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 5. Dispatch Signal (Offer / Answer / ICE Candidate)
+  // 4. Dispatch Signal API (POST /api/room/signal)
   if (req.method === 'POST' && (pathname.includes('/room/signal') || req.url.includes('/room/signal'))) {
     try {
       const data = await parseJsonBody(req);
@@ -186,9 +177,10 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 6. Poll Signals (for serverless Vercel clients)
+  // 5. Poll Signals API (GET /api/room/signals)
   if (req.method === 'GET' && (pathname.includes('/room/signals') || req.url.includes('/room/signals'))) {
-    const clientId = url.searchParams.get('clientId') || new URL(req.url, 'http://localhost').searchParams.get('clientId');
+    const parsedQuery = new URL(req.url, 'http://localhost');
+    const clientId = parsedQuery.searchParams.get('clientId') || url.searchParams.get('clientId');
     if (!clientId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Missing clientId query parameter' }));
@@ -202,7 +194,6 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Fallback 404
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Endpoint not found' }));
+  // 6. Static frontend files fallback (/, /style.css, /app.js, /manifest.json, etc.)
+  serveStatic(req, res, pathname);
 };
