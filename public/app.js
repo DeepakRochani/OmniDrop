@@ -578,9 +578,9 @@
 
     try {
       const { clientOS, clientType } = detectClientDevice();
-      let storedPin = '';
+      let storedPin = myInfo.pin || '';
       try {
-        storedPin = localStorage.getItem('omnidrop_pin') || myInfo.pin || '';
+        if (!storedPin) storedPin = localStorage.getItem('omnidrop_pin') || '';
       } catch (e) {}
 
       const regRes = await fetch('/api/register-web-client', {
@@ -594,16 +594,19 @@
           pin: storedPin || undefined
         })
       });
-      const regData = await regRes.json();
-      if (regData && regData.pin) {
-        myInfo.pin = regData.pin;
-        try { localStorage.setItem('omnidrop_pin', regData.pin); } catch (e) {}
-        const pinBadge = document.getElementById('self-pin-badge');
-        if (pinBadge) pinBadge.textContent = `PIN: ${regData.pin}`;
-        const modalPin = document.getElementById('modal-my-pin');
-        if (modalPin) modalPin.textContent = regData.pin;
-        const quickCodeEl = document.getElementById('quick-my-code');
-        if (quickCodeEl) quickCodeEl.textContent = regData.pin;
+      if (regRes.ok) {
+        const regData = await regRes.json();
+        if (regData && regData.pin) {
+          myInfo.pin = regData.pin;
+          currentRemoteRoomCode = regData.pin;
+          try { localStorage.setItem('omnidrop_pin', regData.pin); } catch (e) {}
+          const pinBadge = document.getElementById('self-pin-badge');
+          if (pinBadge) pinBadge.textContent = `PIN: ${regData.pin}`;
+          const modalPin = document.getElementById('modal-my-pin');
+          if (modalPin) modalPin.textContent = regData.pin;
+          const quickCodeEl = document.getElementById('quick-my-code');
+          if (quickCodeEl) quickCodeEl.textContent = regData.pin;
+        }
       }
     } catch (e) {
       console.warn('[OmniDrop] Registration ping failed:', e.message);
@@ -612,59 +615,94 @@
 
   // --- Fetch Self Info & Setup SSE ---
   async function initSelf() {
+    const { clientOS, clientType } = detectClientDevice();
+    const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+
+    // 1. Guaranteed Instant 6-digit PIN (Zero Waiting, Never stuck on "------")
+    let persistentPin = '';
+    try {
+      persistentPin = localStorage.getItem('omnidrop_pin') || '';
+    } catch (e) {}
+
+    if (!persistentPin || persistentPin.length !== 6 || !/^\d{6}$/.test(persistentPin)) {
+      persistentPin = Math.floor(100000 + Math.random() * 900000).toString();
+      try { localStorage.setItem('omnidrop_pin', persistentPin); } catch (e) {}
+    }
+
+    // Initialize myInfo immediately with full defaults
+    if (!myInfo) myInfo = {};
+    myInfo.id = myInfo.id || myClientId;
+    myInfo.os = myInfo.os || clientOS;
+    myInfo.deviceType = myInfo.deviceType || clientType;
+    myInfo.name = myInfo.name || `${clientOS.toUpperCase()} Device`;
+    myInfo.pin = persistentPin;
+    currentRemoteRoomCode = persistentPin;
+
+    // Immediately display the 6-digit PIN across the UI
+    const pinBadge = document.getElementById('self-pin-badge');
+    if (pinBadge) pinBadge.textContent = `PIN: ${myInfo.pin}`;
+    const modalPin = document.getElementById('modal-my-pin');
+    if (modalPin) modalPin.textContent = myInfo.pin;
+    const quickCodeEl = document.getElementById('quick-my-code');
+    if (quickCodeEl) quickCodeEl.textContent = myInfo.pin;
+    const selfNameEl = document.getElementById('self-name');
+    if (selfNameEl) selfNameEl.textContent = myInfo.name;
+    const avatarIcon = document.getElementById('self-avatar-icon');
+    if (avatarIcon) avatarIcon.innerHTML = getDeviceIconSvg(myInfo.os, myInfo.deviceType);
+
+    // Initial QR code URL (uses window.location.origin on cloud/remote or direct IP on local LAN)
+    const hostUrl = isRemoteClient
+      ? `${window.location.origin}/?room=${myInfo.pin}`
+      : `http://${myInfo.ip || '127.0.0.1'}:${myInfo.port || 53317}/?pair=${myInfo.pin}`;
+    const qrUrlText = document.getElementById('qr-url-text');
+    if (qrUrlText) qrUrlText.textContent = hostUrl;
+    if (window.renderQRCodeSVG) {
+      const qrOutput = document.getElementById('qr-output');
+      if (qrOutput) qrOutput.innerHTML = window.renderQRCodeSVG(hostUrl, { size: 200 });
+    }
+
     try {
       const res = await fetch('/api/me');
-      const data = await res.json();
-      myInfo = data;
-
-      const { clientOS, clientType } = detectClientDevice();
-      const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
-
-      if (isRemoteClient) {
-        myInfo.id = myClientId;
-        myInfo.os = clientOS;
-        myInfo.deviceType = clientType;
-        myInfo.name = `${clientOS.toUpperCase()} Device`;
-
-        // Restore stored PIN if exists
-        try {
-          const savedPin = localStorage.getItem('omnidrop_pin');
-          if (savedPin) myInfo.pin = savedPin;
-        } catch (e) {}
-
-        await registerWithHost();
-      }
-
-      document.getElementById('self-name').textContent = myInfo.name;
-      document.getElementById('self-avatar-icon').innerHTML = getDeviceIconSvg(myInfo.os, myInfo.deviceType);
-      if (myInfo.pin) {
-        document.getElementById('self-pin-badge').textContent = `PIN: ${myInfo.pin}`;
-        document.getElementById('modal-my-pin').textContent = myInfo.pin;
-        const quickCodeEl = document.getElementById('quick-my-code');
-        if (quickCodeEl) quickCodeEl.textContent = myInfo.pin;
-      }
-
-      // Render QR code for other devices to scan - with instant auto-pair link!
-      const hostUrl = `http://${myInfo.ip}:${myInfo.port}/?pair=${myInfo.pin || ''}`;
-      document.getElementById('qr-url-text').textContent = hostUrl;
-      if (window.renderQRCodeSVG) {
-        document.getElementById('qr-output').innerHTML = window.renderQRCodeSVG(hostUrl, { size: 200 });
-      }
-
-      // Connect SSE stream with our specific client ID
-      connectSSE();
-
-      // Fetch initial peer list
-      fetchPeers();
-
-      // Check if URL has ?pair=XXXXXX for instant 0-second auto-connect!
-      const urlParams = new URLSearchParams(window.location.search);
-      const pairPin = urlParams.get('pair');
-      if (pairPin && pairPin !== myInfo.pin) {
-        setTimeout(() => directPairByPin(pairPin), 400);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.id) {
+          if (!isRemoteClient) {
+            myInfo = Object.assign({}, myInfo, data);
+            if (data.pin) myInfo.pin = data.pin;
+          } else {
+            myInfo.downloadsDir = data.downloadsDir || myInfo.downloadsDir;
+          }
+        }
       }
     } catch (err) {
-      console.error('Failed to init self info:', err);
+      console.warn('[OmniDrop] /api/me check fallback to cloud P2P mode:', err.message);
+    }
+
+    // Refresh UI with latest info
+    if (selfNameEl) selfNameEl.textContent = myInfo.name;
+    if (avatarIcon) avatarIcon.innerHTML = getDeviceIconSvg(myInfo.os, myInfo.deviceType);
+    if (pinBadge) pinBadge.textContent = `PIN: ${myInfo.pin}`;
+    if (modalPin) modalPin.textContent = myInfo.pin;
+    if (quickCodeEl) quickCodeEl.textContent = myInfo.pin;
+
+    // On remote/cloud clients (Vercel): register with host/relay and activate WebRTC room
+    if (isRemoteClient) {
+      await registerWithHost();
+      createRemoteRoom();
+      startRoomPolling();
+    }
+
+    // Connect SSE stream
+    connectSSE();
+
+    // Fetch initial peer list
+    fetchPeers();
+
+    // Check if URL has ?pair=XXXXXX or ?room=XXXXXX for instant 0-second auto-connect!
+    const urlParams = new URLSearchParams(window.location.search);
+    const pairPin = urlParams.get('pair') || urlParams.get('room');
+    if (pairPin && pairPin !== myInfo.pin) {
+      setTimeout(() => directPairByPin(pairPin), 400);
     }
   }
 
@@ -2048,6 +2086,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          roomCode: myInfo.pin || undefined,
           peer: {
             id: myInfo.id || myClientId,
             name: myInfo.name,
@@ -2061,6 +2100,10 @@
       const data = await res.json();
       if (data.ok && data.roomCode) {
         currentRemoteRoomCode = data.roomCode;
+        if (!myInfo.pin || myInfo.pin === '------') {
+          myInfo.pin = data.roomCode;
+          try { localStorage.setItem('omnidrop_pin', data.roomCode); } catch (e) {}
+        }
         const shareUrl = `${window.location.origin}/?room=${data.roomCode}`;
 
         const createdBox = document.getElementById('remote-created-box');
@@ -2076,12 +2119,18 @@
           qrContainer.innerHTML = window.renderQRCodeSVG(shareUrl, { size: 180 });
         }
 
+        const pinBadge = document.getElementById('self-pin-badge');
+        if (pinBadge) pinBadge.textContent = `PIN: ${myInfo.pin}`;
+        const modalPin = document.getElementById('modal-my-pin');
+        if (modalPin) modalPin.textContent = myInfo.pin;
+        const quickCodeEl = document.getElementById('quick-my-code');
+        if (quickCodeEl) quickCodeEl.textContent = myInfo.pin;
+
         startRoomPolling();
-        showToast(`🌐 Worldwide Room #${data.roomCode} created! Share the link or PIN.`);
         return data.roomCode;
       }
     } catch (err) {
-      showToast(`Failed to create remote room: ${err.message}`);
+      console.warn('createRemoteRoom error:', err);
     }
   }
 
@@ -2480,11 +2529,15 @@
       });
 
       const data = await res.json();
-      if (data.ok && data.peer) {
-        peersMap.set(data.peer.id, data.peer);
+      const targetPeer = data.peer || data.target;
+      if (data.ok && targetPeer) {
+        peersMap.set(targetPeer.id, targetPeer);
         renderRadarPeers();
         playChime('incoming');
-        showToast(`✨ Connected to ${data.peer.name}! Tap avatar to send.`);
+        showToast(`✨ Connected to ${targetPeer.name}! Tap avatar to send.`);
+        if (!window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')) {
+          joinRemoteRoom(cleanPin);
+        }
         return true;
       }
     } catch (err) {

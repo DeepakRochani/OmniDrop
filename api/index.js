@@ -110,26 +110,175 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 2. Create Room API (POST /api/room/create)
-  if (req.method === 'POST' && fullPath.includes('room/create')) {
-    const data = await parseJsonBody(req).catch(() => ({}));
-    let code;
+  // 2. Get Me / Device Info API (GET /api/me)
+  if (req.method === 'GET' && (fullPath.includes('api/me') || fullPath.includes('/api/me'))) {
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1').split(',')[0].trim();
+    let pin;
     do {
-      code = Math.floor(100000 + Math.random() * 900000).toString();
-    } while (rooms.has(code));
+      pin = Math.floor(100000 + Math.random() * 900000).toString();
+    } while (rooms.has(pin));
+
+    const cloudPeer = {
+      id: 'omni_' + Math.random().toString(36).substring(2, 10),
+      name: 'OmniDrop Cloud Node',
+      deviceType: 'cloud',
+      os: 'web',
+      ip: clientIp,
+      port: 443,
+      pin: pin,
+      isHost: false,
+      isCloud: true,
+      downloadsDir: 'Downloads',
+      protocol: 'omni-v1'
+    };
 
     const roomPeers = new Map();
-    if (data && data.peer && data.peer.id) {
-      roomPeers.set(data.peer.id, data.peer);
+    roomPeers.set(cloudPeer.id, cloudPeer);
+    rooms.set(pin, { code: pin, peers: roomPeers, createdAt: Date.now() });
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(cloudPeer));
+    return;
+  }
+
+  // 3. Register Web Client API (POST /api/register-web-client)
+  if (req.method === 'POST' && (fullPath.includes('register-web-client') || fullPath.includes('api/register-web-client'))) {
+    const data = await parseJsonBody(req).catch(() => ({}));
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1').split(',')[0].trim();
+    const clientId = data.id || ('web_' + Math.random().toString(36).substring(2, 10));
+    let clientPin = (data.pin || '').toString().trim().replace(/\D/g, '');
+    if (!clientPin || clientPin.length !== 6) {
+      do {
+        clientPin = Math.floor(100000 + Math.random() * 900000).toString();
+      } while (rooms.has(clientPin));
     }
-    rooms.set(code, { code, peers: roomPeers, createdAt: Date.now() });
+
+    const clientPeer = {
+      id: clientId,
+      name: data.name || (data.os ? `${data.os} Device` : 'OmniDrop Device'),
+      deviceType: data.deviceType || 'phone',
+      os: data.os || 'browser',
+      ip: clientIp,
+      port: 443,
+      lastSeen: Date.now(),
+      isWeb: true,
+      isRemote: true,
+      isWebRTC: true,
+      pin: clientPin
+    };
+
+    let room = rooms.get(clientPin);
+    if (!room) {
+      room = { code: clientPin, peers: new Map(), createdAt: Date.now() };
+      rooms.set(clientPin, room);
+    }
+    room.peers.set(clientId, clientPeer);
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, pin: clientPin, peer: clientPeer }));
+    return;
+  }
+
+  // 4. Pair by PIN API (POST /api/pair-by-pin)
+  if (req.method === 'POST' && (fullPath.includes('pair-by-pin') || fullPath.includes('api/pair-by-pin'))) {
+    const data = await parseJsonBody(req).catch(() => ({}));
+    const cleanPin = (data.pin || '').toString().trim().replace(/\D/g, '');
+    const sender = data.sender || {};
+    const room = rooms.get(cleanPin);
+
+    if (!room) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `No device or room found with PIN ${cleanPin}.` }));
+      return;
+    }
+
+    if (sender.id) {
+      room.peers.set(sender.id, {
+        id: sender.id,
+        name: sender.name || 'OmniDrop Peer',
+        os: sender.os || 'unknown',
+        deviceType: sender.deviceType || 'phone',
+        isWebRTC: true,
+        isRemote: true,
+        pin: sender.pin || cleanPin
+      });
+
+      for (const [pid] of room.peers.entries()) {
+        if (pid !== sender.id) {
+          const queue = roomSignals.get(pid) || [];
+          queue.push({ fromId: sender.id, signal: { type: 'room_peer_joined', roomCode: cleanPin, peer: sender } });
+          roomSignals.set(pid, queue);
+        }
+      }
+    }
+
+    const peersList = Array.from(room.peers.values()).filter(p => p.id !== sender.id);
+    const target = peersList[0] || { name: 'Remote Peer', id: 'remote', pin: cleanPin };
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, target, peers: peersList, roomCode: cleanPin, method: 'webrtc' }));
+    return;
+  }
+
+  // 5. Get Discovered Peers (GET /api/peers)
+  if (req.method === 'GET' && (fullPath.includes('api/peers') || fullPath.includes('/api/peers'))) {
+    const allPeers = [];
+    const seen = new Set();
+    for (const room of rooms.values()) {
+      for (const p of room.peers.values()) {
+        if (!seen.has(p.id)) {
+          seen.add(p.id);
+          allPeers.push(p);
+        }
+      }
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(allPeers));
+    return;
+  }
+
+  // 6. SSE Events Stream (GET /api/events)
+  if (req.method === 'GET' && (fullPath.includes('api/events') || fullPath.includes('/api/events'))) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.write('data: {"type":"connected","time":' + Date.now() + '}\n\n');
+    const timer = setTimeout(() => {
+      try { res.end(); } catch (e) {}
+    }, 25000);
+    req.on('close', () => clearTimeout(timer));
+    return;
+  }
+
+  // 7. Create Room API (POST /api/room/create)
+  if (req.method === 'POST' && fullPath.includes('room/create')) {
+    const data = await parseJsonBody(req).catch(() => ({}));
+    let code = (data && data.roomCode) || (data && data.peer && data.peer.pin);
+    if (!code || code.length !== 6) {
+      do {
+        code = Math.floor(100000 + Math.random() * 900000).toString();
+      } while (rooms.has(code));
+    }
+
+    let room = rooms.get(code);
+    if (!room) {
+      room = { code, peers: new Map(), createdAt: Date.now() };
+      rooms.set(code, room);
+    }
+
+    if (data && data.peer && data.peer.id) {
+      room.peers.set(data.peer.id, data.peer);
+    }
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, roomCode: code }));
     return;
   }
 
-  // 3. Join Room API (POST /api/room/join)
+  // 8. Join Room API (POST /api/room/join)
   if (req.method === 'POST' && fullPath.includes('room/join')) {
     try {
       const data = await parseJsonBody(req);
@@ -162,7 +311,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 4. Dispatch Signal API (POST /api/room/signal)
+  // 9. Dispatch Signal API (POST /api/room/signal)
   if (req.method === 'POST' && fullPath.includes('room/signal')) {
     try {
       const data = await parseJsonBody(req);
@@ -180,7 +329,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 5. Poll Signals API (GET /api/room/signals)
+  // 10. Poll Signals API (GET /api/room/signals)
   if (req.method === 'GET' && fullPath.includes('room/signals')) {
     const parsedQuery = new URL(req.url, 'http://localhost');
     const clientId = parsedQuery.searchParams.get('clientId') || url.searchParams.get('clientId');
@@ -197,6 +346,13 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 6. Static frontend files fallback (/, /style.css, /app.js, /manifest.json, etc.)
+  // 11. API 404 Fallback (never serve static files for /api/* requests)
+  if (url.pathname.startsWith('/api/') || (req.query && req.query.slug)) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'API endpoint not found', path: url.pathname }));
+    return;
+  }
+
+  // 12. Static frontend files fallback (/, /style.css, /app.js, /manifest.json, etc.)
   serveStatic(req, res, url.pathname);
 };
