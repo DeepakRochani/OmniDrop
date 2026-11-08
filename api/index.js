@@ -1,8 +1,27 @@
-// Vercel Serverless Function: Room Signaling Relay for Worldwide WebRTC P2P
-// Handles /api/room/create, /api/room/join, /api/room/signal, /api/room/signals
+// Vercel Serverless Function: OmniDrop Universal Handler
+// Serves static web assets from /public and provides WebRTC room signaling under /api/room/*
+
+const fs = require('fs');
+const path = require('path');
 
 const rooms = new Map(); // In-memory room store within the serverless container instance
 const roomSignals = new Map(); // In-memory signal polling queue
+
+const MIME_TYPES = {
+  '.html': 'text/html; charset=UTF-8',
+  '.css': 'text/css; charset=UTF-8',
+  '.js': 'application/javascript; charset=UTF-8',
+  '.json': 'application/json; charset=UTF-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg'
+};
 
 // Clean up rooms older than 2 hours
 function cleanupExpired() {
@@ -26,8 +45,41 @@ function parseJsonBody(req) {
   });
 }
 
+// Serve static frontend files from /public directory
+function serveStatic(req, res, pathname) {
+  let relativePath = pathname === '/' ? '/index.html' : pathname;
+  if (relativePath.startsWith('/public/')) {
+    relativePath = relativePath.slice('/public'.length);
+  }
+  const publicDir = path.join(__dirname, '..', 'public');
+  const safePath = path.normalize(path.join(publicDir, relativePath));
+
+  if (!safePath.startsWith(publicDir)) {
+    res.writeHead(403);
+    res.end('Access Denied');
+    return;
+  }
+
+  fs.stat(safePath, (err, stats) => {
+    if (err || !stats.isFile()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('File Not Found');
+      return;
+    }
+
+    const ext = path.extname(safePath).toLowerCase();
+    const mime = MIME_TYPES[ext] || 'application/octet-stream';
+    res.writeHead(200, {
+      'Content-Type': mime,
+      'Content-Length': stats.size,
+      'Cache-Control': relativePath.endsWith('.html') ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000, immutable'
+    });
+    fs.createReadStream(safePath).pipe(res);
+  });
+}
+
 module.exports = async (req, res) => {
-  // Enable CORS for worldwide access
+  // Enable CORS for worldwide cross-device access
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -43,14 +95,20 @@ module.exports = async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = url.pathname;
 
-  // Health check / Info
+  // 1. Static frontend assets (if not /api/*)
+  if (!pathname.startsWith('/api')) {
+    serveStatic(req, res, pathname);
+    return;
+  }
+
+  // 2. Health check / Info
   if (pathname === '/api' || pathname === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, service: 'OmniDrop WebRTC Signaling Serverless' }));
     return;
   }
 
-  // 1. Create Room
+  // 3. Create Room
   if (req.method === 'POST' && (pathname === '/api/room/create' || pathname.endsWith('/room/create'))) {
     const data = await parseJsonBody(req).catch(() => ({}));
     let code;
@@ -69,7 +127,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 2. Join Room
+  // 4. Join Room
   if (req.method === 'POST' && (pathname === '/api/room/join' || pathname.endsWith('/room/join'))) {
     try {
       const data = await parseJsonBody(req);
@@ -102,7 +160,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 3. Dispatch Signal (Offer / Answer / ICE Candidate)
+  // 5. Dispatch Signal (Offer / Answer / ICE Candidate)
   if (req.method === 'POST' && (pathname === '/api/room/signal' || pathname.endsWith('/room/signal'))) {
     try {
       const data = await parseJsonBody(req);
@@ -120,7 +178,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 4. Poll Signals (for serverless Vercel clients)
+  // 6. Poll Signals (for serverless Vercel clients)
   if (req.method === 'GET' && (pathname === '/api/room/signals' || pathname.endsWith('/room/signals'))) {
     const clientId = url.searchParams.get('clientId');
     if (!clientId) {
@@ -140,4 +198,3 @@ module.exports = async (req, res) => {
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Endpoint not found' }));
 };
-
