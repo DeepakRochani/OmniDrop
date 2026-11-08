@@ -95,15 +95,17 @@ module.exports = async (req, res) => {
   const rawPath = req.headers['x-matched-path'] || req.headers['x-vercel-matched-path'] || req.headers['x-forwarded-uri'] || req.url;
   const url = new URL(rawPath, `http://${req.headers.host || 'localhost'}`);
   const slugPath = req.query && req.query.slug ? '/' + [].concat(req.query.slug).join('/') : '';
-  const routeParam = url.searchParams.get('route') || (new URL(req.url, 'http://localhost').searchParams.get('route')) || '';
-  const fullPath = `${slugPath} ${routeParam} ${url.pathname} ${req.url}`;
+  const parsedReqUrl = new URL(req.url, 'http://localhost');
+  const routeParam = (req.query && req.query.route) || parsedReqUrl.searchParams.get('route') || url.searchParams.get('route') || '';
+  const fullPath = `${slugPath} ${routeParam} ${url.pathname} ${req.url}`.toLowerCase();
 
   // 1. Health check & Diagnostics
-  if (fullPath.includes('/health') || fullPath.includes('health') || fullPath.includes('debug')) {
+  if (routeParam === 'health' || fullPath.includes('/health') || fullPath.includes('health') || fullPath.includes('debug')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
       service: 'OmniDrop WebRTC Signaling Serverless',
+      routeParam,
       fullPath,
       reqUrl: req.url
     }));
@@ -111,7 +113,7 @@ module.exports = async (req, res) => {
   }
 
   // 2. Get Me / Device Info API (GET /api/me)
-  if (req.method === 'GET' && (fullPath.includes('api/me') || fullPath.includes('/api/me'))) {
+  if (req.method === 'GET' && (routeParam === 'me' || routeParam === 'api/me' || fullPath.includes('api/me') || fullPath.includes('/api/me'))) {
     const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1').split(',')[0].trim();
     let pin;
     do {
@@ -142,7 +144,7 @@ module.exports = async (req, res) => {
   }
 
   // 3. Register Web Client API (POST /api/register-web-client)
-  if (req.method === 'POST' && (fullPath.includes('register-web-client') || fullPath.includes('api/register-web-client'))) {
+  if (req.method === 'POST' && (routeParam === 'register-web-client' || fullPath.includes('register-web-client'))) {
     const data = await parseJsonBody(req).catch(() => ({}));
     const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1').split(',')[0].trim();
     const clientId = data.id || ('web_' + Math.random().toString(36).substring(2, 10));
@@ -180,7 +182,7 @@ module.exports = async (req, res) => {
   }
 
   // 4. Pair by PIN API (POST /api/pair-by-pin)
-  if (req.method === 'POST' && (fullPath.includes('pair-by-pin') || fullPath.includes('api/pair-by-pin'))) {
+  if (req.method === 'POST' && (routeParam === 'pair-by-pin' || fullPath.includes('pair-by-pin'))) {
     const data = await parseJsonBody(req).catch(() => ({}));
     const cleanPin = (data.pin || '').toString().trim().replace(/\D/g, '');
     const sender = data.sender || {};
@@ -216,12 +218,12 @@ module.exports = async (req, res) => {
     const target = peersList[0] || { name: 'Remote Peer', id: 'remote', pin: cleanPin };
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, target, peers: peersList, roomCode: cleanPin, method: 'webrtc' }));
+    res.end(JSON.stringify({ ok: true, target, peer: target, peers: peersList, roomCode: cleanPin, method: 'webrtc' }));
     return;
   }
 
   // 5. Get Discovered Peers (GET /api/peers)
-  if (req.method === 'GET' && (fullPath.includes('api/peers') || fullPath.includes('/api/peers'))) {
+  if (req.method === 'GET' && (routeParam === 'peers' || fullPath.includes('api/peers') || fullPath.includes('/api/peers'))) {
     const allPeers = [];
     const seen = new Set();
     for (const room of rooms.values()) {
@@ -238,7 +240,7 @@ module.exports = async (req, res) => {
   }
 
   // 6. SSE Events Stream (GET /api/events)
-  if (req.method === 'GET' && (fullPath.includes('api/events') || fullPath.includes('/api/events'))) {
+  if (req.method === 'GET' && (routeParam === 'events' || fullPath.includes('api/events') || fullPath.includes('/api/events'))) {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
@@ -254,7 +256,7 @@ module.exports = async (req, res) => {
   }
 
   // 7. Create Room API (POST /api/room/create)
-  if (req.method === 'POST' && fullPath.includes('room/create')) {
+  if (req.method === 'POST' && (routeParam === 'room/create' || fullPath.includes('room/create'))) {
     const data = await parseJsonBody(req).catch(() => ({}));
     let code = (data && data.roomCode) || (data && data.peer && data.peer.pin);
     if (!code || code.length !== 6) {
@@ -279,7 +281,7 @@ module.exports = async (req, res) => {
   }
 
   // 8. Join Room API (POST /api/room/join)
-  if (req.method === 'POST' && fullPath.includes('room/join')) {
+  if (req.method === 'POST' && (routeParam === 'room/join' || fullPath.includes('room/join'))) {
     try {
       const data = await parseJsonBody(req);
       const { roomCode, peer } = data;
@@ -312,7 +314,7 @@ module.exports = async (req, res) => {
   }
 
   // 9. Dispatch Signal API (POST /api/room/signal)
-  if (req.method === 'POST' && fullPath.includes('room/signal')) {
+  if (req.method === 'POST' && (routeParam === 'room/signal' || fullPath.includes('room/signal'))) {
     try {
       const data = await parseJsonBody(req);
       const { toId, fromId, signal, roomCode } = data;
@@ -330,7 +332,7 @@ module.exports = async (req, res) => {
   }
 
   // 10. Poll Signals API (GET /api/room/signals)
-  if (req.method === 'GET' && fullPath.includes('room/signals')) {
+  if (req.method === 'GET' && (routeParam === 'room/signals' || fullPath.includes('room/signals'))) {
     const parsedQuery = new URL(req.url, 'http://localhost');
     const clientId = parsedQuery.searchParams.get('clientId') || url.searchParams.get('clientId');
     if (!clientId) {
@@ -347,9 +349,9 @@ module.exports = async (req, res) => {
   }
 
   // 11. API 404 Fallback (never serve static files for /api/* requests)
-  if (url.pathname.startsWith('/api/') || (req.query && req.query.slug)) {
+  if (routeParam || url.pathname.startsWith('/api/') || (req.query && req.query.slug)) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'API endpoint not found', path: url.pathname }));
+    res.end(JSON.stringify({ error: 'API endpoint not found', path: url.pathname, routeParam }));
     return;
   }
 
