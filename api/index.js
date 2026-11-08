@@ -221,7 +221,8 @@ module.exports = async (req, res) => {
       isWeb: true,
       isRemote: true,
       isWebRTC: true,
-      pin: clientPin
+      pin: clientPin,
+      peerId: data.peerId || ('od_' + clientPin)
     };
 
     let room = rooms.get(clientPin);
@@ -241,40 +242,57 @@ module.exports = async (req, res) => {
     const data = await parseJsonBody(req).catch(() => ({}));
     const cleanPin = (data.pin || '').toString().trim().replace(/\D/g, '');
     const sender = data.sender || {};
-    const room = rooms.get(cleanPin);
+    let room = rooms.get(cleanPin);
 
-    if (!room) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: `No device or room found with PIN ${cleanPin}.` }));
-      return;
-    }
+    const senderPeer = sender.id ? {
+      id: sender.id,
+      name: sender.name || 'OmniDrop Peer',
+      os: sender.os || 'unknown',
+      deviceType: sender.deviceType || 'phone',
+      isWebRTC: true,
+      isRemote: true,
+      pin: sender.pin || cleanPin,
+      peerId: sender.peerId || ('od_' + (sender.pin || cleanPin)),
+      ip: clientIp,
+      localLanIp: sender.localLanIp || undefined,
+      lastSeen: Date.now()
+    } : null;
 
-    if (sender.id) {
-      const senderPeer = {
-        id: sender.id,
-        name: sender.name || 'OmniDrop Peer',
-        os: sender.os || 'unknown',
-        deviceType: sender.deviceType || 'phone',
-        isWebRTC: true,
-        isRemote: true,
-        pin: sender.pin || cleanPin,
-        ip: clientIp,
-        localLanIp: sender.localLanIp || undefined,
-        lastSeen: Date.now()
-      };
-      room.peers.set(sender.id, senderPeer);
+    let target = null;
+    let peersList = [];
 
-      for (const [pid] of room.peers.entries()) {
-        if (pid !== sender.id) {
-          const queue = roomSignals.get(pid) || [];
-          queue.push({ fromId: sender.id, signal: { type: 'room_peer_joined', roomCode: cleanPin, peer: senderPeer } });
-          roomSignals.set(pid, queue);
+    if (room) {
+      if (senderPeer) {
+        room.peers.set(sender.id, senderPeer);
+        for (const [pid] of room.peers.entries()) {
+          if (pid !== sender.id) {
+            const queue = roomSignals.get(pid) || [];
+            queue.push({ fromId: sender.id, signal: { type: 'room_peer_joined', roomCode: cleanPin, peer: senderPeer } });
+            roomSignals.set(pid, queue);
+          }
         }
       }
+      peersList = Array.from(room.peers.values()).filter(p => p.id !== sender.id);
+      target = peersList[0];
+    } else {
+      // Room was not in this container instance; create it dynamically so future lookups succeed
+      room = { code: cleanPin, peers: new Map(), createdAt: Date.now() };
+      rooms.set(cleanPin, room);
+      if (senderPeer) room.peers.set(sender.id, senderPeer);
     }
 
-    const peersList = Array.from(room.peers.values()).filter(p => p.id !== sender.id);
-    const target = peersList[0] || { name: 'Remote Peer', id: 'remote', pin: cleanPin, isWebRTC: true, isRemote: true };
+    if (!target) {
+      target = {
+        name: `OmniDrop Peer (#${cleanPin})`,
+        id: 'peer_' + cleanPin,
+        pin: cleanPin,
+        peerId: 'od_' + cleanPin,
+        isWebRTC: true,
+        isRemote: true,
+        lastSeen: Date.now()
+      };
+      peersList = [target];
+    }
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, target, peer: target, peers: peersList, roomCode: cleanPin, method: 'webrtc' }));
@@ -332,6 +350,7 @@ module.exports = async (req, res) => {
 
         if (isClientRoom || isSameNetwork) {
           seen.add(pid);
+          p.peerId = p.peerId || ('od_' + p.pin);
           relevantPeers.push(p);
         }
       }
@@ -394,18 +413,18 @@ module.exports = async (req, res) => {
     try {
       const data = await parseJsonBody(req);
       const { roomCode, peer } = data;
-      const room = rooms.get(roomCode);
+      let room = rooms.get(roomCode);
       if (!room) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Room code not found or expired' }));
-        return;
+        room = { code: roomCode, peers: new Map(), createdAt: Date.now() };
+        rooms.set(roomCode, room);
       }
 
       const peerRecord = Object.assign({}, peer, {
         ip: clientIp,
         lastSeen: Date.now(),
         isWebRTC: true,
-        isRemote: true
+        isRemote: true,
+        peerId: (peer && peer.peerId) || ('od_' + ((peer && peer.pin) || roomCode))
       });
 
       const existingPeers = Array.from(room.peers.values());

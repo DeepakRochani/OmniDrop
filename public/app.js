@@ -473,6 +473,241 @@
   let currentWebRTCReceiving = null;
   const pendingSendFilesQueue = new Map(); // targetId -> { targetPeer, files }
 
+  // --- PeerJS Worldwide Cloud Broker Integration ---
+  let myPeer = null;
+  const peerJSConnections = new Map(); // key: peerId/PIN -> DataConnection
+
+  function updatePinDisplays(pin) {
+    if (!pin) return;
+    myInfo.pin = pin;
+    currentRemoteRoomCode = pin;
+    try { localStorage.setItem('omnidrop_pin', pin); } catch (e) {}
+
+    const pinBadge = document.getElementById('self-pin-badge');
+    if (pinBadge) pinBadge.textContent = `PIN: ${pin}`;
+    const modalPin = document.getElementById('modal-my-pin');
+    if (modalPin) modalPin.textContent = pin;
+    const quickCodeEl = document.getElementById('quick-my-code');
+    if (quickCodeEl) quickCodeEl.textContent = pin;
+
+    const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+    const hostUrl = isRemoteClient
+      ? `${window.location.origin}/?room=${pin}`
+      : `http://${myInfo.ip || '127.0.0.1'}:${myInfo.port || 53317}/?pair=${pin}`;
+    const qrUrlText = document.getElementById('qr-url-text');
+    if (qrUrlText) qrUrlText.textContent = hostUrl;
+    if (window.renderQRCodeSVG) {
+      const qrOutput = document.getElementById('qr-output');
+      if (qrOutput) qrOutput.innerHTML = window.renderQRCodeSVG(hostUrl, { size: 200 });
+      const qrContainer = document.getElementById('qr-container');
+      if (qrContainer) qrContainer.innerHTML = window.renderQRCodeSVG(hostUrl, { size: 180 });
+    }
+  }
+
+  function initPeerJS(preferredPin) {
+    if (typeof Peer === 'undefined') {
+      console.warn('[PeerJS] Peer library not loaded yet');
+      return;
+    }
+    const pin = (preferredPin || myInfo.pin || '').toString().trim().replace(/\D/g, '');
+    if (!pin || pin.length !== 6) return;
+
+    const targetId = 'od_' + pin;
+    if (myPeer && !myPeer.destroyed && myPeer.id === targetId) {
+      return;
+    }
+    if (myPeer && !myPeer.destroyed) {
+      try { myPeer.destroy(); } catch (e) {}
+    }
+
+    try {
+      console.log(`[PeerJS] Initializing broker with ID: ${targetId}`);
+      myPeer = new Peer(targetId, {
+        debug: 1,
+        config: RTC_CONFIG
+      });
+
+      myPeer.on('open', (id) => {
+        console.log(`[PeerJS] Connected to signaling broker! Active ID: ${id}`);
+        myInfo.peerId = id;
+      });
+
+      myPeer.on('connection', (conn) => {
+        console.log(`[PeerJS] Incoming connection from: ${conn.peer}`);
+        setupPeerJSDataConnection(conn);
+      });
+
+      myPeer.on('error', (err) => {
+        console.warn(`[PeerJS] Broker error (${err.type}):`, err.message);
+        if (err.type === 'unavailable-id') {
+          console.warn('[PeerJS] PIN in use on broker, refreshing PIN...');
+          const freshPin = Math.floor(100000 + Math.random() * 900000).toString();
+          updatePinDisplays(freshPin);
+          setTimeout(() => initPeerJS(freshPin), 500);
+        }
+      });
+
+      myPeer.on('disconnected', () => {
+        console.log('[PeerJS] Disconnected from broker, reconnecting...');
+        if (myPeer && !myPeer.destroyed) {
+          try { myPeer.reconnect(); } catch (e) {}
+        }
+      });
+    } catch (err) {
+      console.warn('[PeerJS] Initialization error:', err);
+    }
+  }
+
+  function setupPeerJSDataConnection(conn) {
+    if (!conn) return;
+
+    const onOpen = () => {
+      console.log(`[PeerJS DataConnection OPEN] with ${conn.peer}`);
+      peerJSConnections.set(conn.peer, conn);
+
+      let remotePin = '';
+      if (conn.peer && conn.peer.startsWith('od_')) {
+        remotePin = conn.peer.slice(3);
+        peerJSConnections.set(remotePin, conn);
+      }
+
+      // Store in webrtcConnections so existing WebRTC pipelines use this connection
+      const wrapper = {
+        pc: conn.peerConnection,
+        dc: conn.dataChannel || conn,
+        peerConn: conn,
+        peerId: conn.peer,
+        pin: remotePin,
+        isPeerJS: true,
+        isWebRTC: true,
+        isRemote: true
+      };
+      webrtcConnections.set(conn.peer, wrapper);
+      if (remotePin) {
+        webrtcConnections.set(remotePin, wrapper);
+      }
+
+      // Send self peer info so remote peer registers us on radar
+      try {
+        conn.send(JSON.stringify({
+          type: 'PEER_INFO',
+          peer: {
+            id: myInfo.id || myClientId,
+            name: myInfo.name,
+            os: myInfo.os,
+            deviceType: myInfo.deviceType,
+            pin: myInfo.pin,
+            peerId: myPeer ? myPeer.id : ('od_' + myInfo.pin),
+            isWebRTC: true,
+            isRemote: true
+          }
+        }));
+      } catch (e) {}
+
+      // Auto-drain any queued transfers for this peer
+      for (const [key, item] of pendingSendFilesQueue.entries()) {
+        const matches = (key === conn.peer) || (remotePin && key === remotePin) ||
+          (item.targetPeer && (item.targetPeer.id === conn.peer || item.targetPeer.pin === remotePin || ('od_' + item.targetPeer.pin) === conn.peer));
+        if (matches) {
+          pendingSendFilesQueue.delete(key);
+          const modal = document.getElementById('modal-progress');
+          if (modal) {
+            document.getElementById('progress-title').textContent = 'Waiting for Recipient...';
+            document.getElementById('progress-target').textContent = `Waiting for ${item.targetPeer.name} to accept (Worldwide P2P)...`;
+          }
+          initiateWebRTCSendFiles(item.targetPeer, item.files, conn.dataChannel || conn);
+          break;
+        }
+      }
+    };
+
+    if (conn.open) {
+      onOpen();
+    } else {
+      conn.on('open', onOpen);
+    }
+
+    conn.on('data', (data) => {
+      handlePeerJSData(conn, data);
+    });
+
+    conn.on('close', () => {
+      console.log(`[PeerJS DataConnection CLOSED] with ${conn.peer}`);
+      peerJSConnections.delete(conn.peer);
+      webrtcConnections.delete(conn.peer);
+    });
+
+    conn.on('error', (err) => {
+      console.warn(`[PeerJS DataConnection ERROR] with ${conn.peer}:`, err);
+    });
+  }
+
+  function handlePeerJSData(conn, data) {
+    if (data instanceof ArrayBuffer) {
+      handleWebRTCBinaryChunk(data);
+      return;
+    }
+
+    let msg = data;
+    if (typeof data === 'string') {
+      try { msg = JSON.parse(data); } catch (e) { return; }
+    }
+    if (!msg || typeof msg !== 'object') return;
+
+    if (msg.type === 'PEER_INFO' && msg.peer) {
+      const p = msg.peer;
+      p.isWebRTC = true;
+      p.isRemote = true;
+      p.peerId = conn.peer;
+      peersMap.set(p.id, p);
+      if (p.pin) {
+        peersMap.set('od_' + p.pin, p);
+      }
+      const existing = webrtcConnections.get(conn.peer);
+      if (existing) {
+        existing.peer = p;
+        webrtcConnections.set(p.id, existing);
+      }
+      renderRadarPeers();
+      playChime('incoming');
+      showToast(`✨ Connected to ${p.name}!`);
+      return;
+    }
+
+    const senderPeer = (msg.sender && peersMap.get(msg.sender.id)) || peersMap.get(conn.peer) || {
+      id: conn.peer,
+      name: (msg.sender && msg.sender.name) || 'Remote Device',
+      os: (msg.sender && msg.sender.os) || 'unknown',
+      isWebRTC: true,
+      isRemote: true
+    };
+    handleWebRTCControlMessage(msg, senderPeer.id, senderPeer, conn.dataChannel || conn);
+  }
+
+  function connectPeerViaPeerJS(targetPeer) {
+    if (typeof Peer === 'undefined') return null;
+    if (!myPeer || myPeer.destroyed) {
+      initPeerJS();
+    }
+    if (!myPeer) return null;
+
+    const targetPeerId = targetPeer.peerId || (targetPeer.pin ? ('od_' + targetPeer.pin) : null);
+    if (!targetPeerId) return null;
+
+    let conn = peerJSConnections.get(targetPeerId) || (targetPeer.pin ? peerJSConnections.get(targetPeer.pin) : null);
+    if (conn && conn.open) return conn;
+
+    try {
+      console.log(`[PeerJS] Connecting to peer: ${targetPeerId}`);
+      conn = myPeer.connect(targetPeerId, { reliable: true, serialization: 'none' });
+      setupPeerJSDataConnection(conn);
+      return conn;
+    } catch (e) {
+      console.warn('[PeerJS] connect failed:', e);
+      return null;
+    }
+  }
+
   // Detect local subnet LAN IP via WebRTC host candidate
   function detectLocalLanIp() {
     try {
@@ -576,20 +811,22 @@
     }
   });
 
-  // Get active nearby peers deduplicated by physical device (IP + OS)
+  // Get active nearby peers deduplicated by physical device (IP + OS or PIN)
   function getActiveUniquePeers() {
     const unique = new Map();
     for (const peer of peersMap.values()) {
       if (!peer || !peer.id) continue;
       if (peer.id === myInfo.id || peer.id === myClientId) continue;
+      if (myPeer && peer.id === myPeer.id) continue;
+      if (myInfo.pin && (peer.pin === myInfo.pin || peer.id === 'od_' + myInfo.pin)) continue;
       if (peer.id === 'cloud_node' || peer.id.startsWith('omni_')) continue;
       if (peer.name && peer.name.includes('Cloud Node')) continue;
-      // Deduplicate by IP address if present, otherwise by ID
-      const key = (peer.isRemote || peer.isWebRTC)
-        ? peer.id
-        : ((peer.ip && peer.ip !== '127.0.0.1' && peer.ip !== 'localhost' && peer.ip !== 'Connected')
-            ? `${peer.ip}_${peer.os || ''}`
-            : peer.id);
+
+      // Deduplicate by PIN if present, otherwise by ID
+      const key = (peer.pin && peer.pin.length === 6)
+        ? `pin_${peer.pin}`
+        : (peer.id.startsWith('od_') ? `pin_${peer.id.slice(3)}` : peer.id);
+
       unique.set(key, peer);
     }
     return Array.from(unique.values());
@@ -616,6 +853,7 @@
           deviceType: myInfo.deviceType || clientType,
           os: myInfo.os || clientOS,
           pin: storedPin || undefined,
+          peerId: myPeer ? myPeer.id : ('od_' + (storedPin || myInfo.pin)),
           localLanIp: myInfo.localLanIp || undefined
         })
       });
@@ -625,12 +863,8 @@
           myInfo.pin = regData.pin;
           currentRemoteRoomCode = regData.pin;
           try { localStorage.setItem('omnidrop_pin', regData.pin); } catch (e) {}
-          const pinBadge = document.getElementById('self-pin-badge');
-          if (pinBadge) pinBadge.textContent = `PIN: ${regData.pin}`;
-          const modalPin = document.getElementById('modal-my-pin');
-          if (modalPin) modalPin.textContent = regData.pin;
-          const quickCodeEl = document.getElementById('quick-my-code');
-          if (quickCodeEl) quickCodeEl.textContent = regData.pin;
+          updatePinDisplays(regData.pin);
+          initPeerJS(regData.pin);
         }
       }
     } catch (e) {
@@ -707,9 +941,8 @@
     // Refresh UI with latest info
     if (selfNameEl) selfNameEl.textContent = myInfo.name;
     if (avatarIcon) avatarIcon.innerHTML = getDeviceIconSvg(myInfo.os, myInfo.deviceType);
-    if (pinBadge) pinBadge.textContent = `PIN: ${myInfo.pin}`;
-    if (modalPin) modalPin.textContent = myInfo.pin;
-    if (quickCodeEl) quickCodeEl.textContent = myInfo.pin;
+    updatePinDisplays(myInfo.pin);
+    initPeerJS(myInfo.pin);
 
     // On remote/cloud clients (Vercel): register with host/relay and activate WebRTC room
     if (isRemoteClient) {
@@ -896,11 +1129,14 @@
         if (isRemoteEnv || peer.isWebRTC || peer.isRemote) {
           peer.isWebRTC = true;
           peer.isRemote = true;
+          if (peer.pin) {
+            connectPeerViaPeerJS(peer);
+          }
           const myId = myInfo.id || myClientId;
           const targetRoom = peer.roomCode || peer.pin || currentRemoteRoomCode;
           // Glare-free negotiation: device with lexicographically smaller ID initiates offer
           const shouldInitiate = myId < peer.id;
-          if (!webrtcConnections.has(peer.id)) {
+          if (!webrtcConnections.has(peer.id) && !peerJSConnections.has('od_' + peer.pin)) {
             createWebRTCPeerConnection(peer.id, peer, targetRoom, shouldInitiate);
           }
         }
@@ -1051,6 +1287,13 @@
 
       // 4. Check for any pending native shares
       checkPendingShareTarget();
+
+      // 5. Ensure PeerJS cloud signaling is actively connected
+      if (myPeer && myPeer.disconnected && !myPeer.destroyed) {
+        try { myPeer.reconnect(); } catch (e) {}
+      } else if (!myPeer || myPeer.destroyed) {
+        initPeerJS(myInfo.pin);
+      }
     } catch (err) {
       console.warn('[OmniDrop] Wake-up sync error:', err);
     } finally {
@@ -1195,15 +1438,20 @@
     if (targetPeer.isWebRTC || webrtcConnections.has(targetPeer.id) || isRemoteEnv) {
       targetPeer.isWebRTC = true;
       targetPeer.isRemote = true;
-      let conn = webrtcConnections.get(targetPeer.id);
+      const targetPeerId = targetPeer.peerId || (targetPeer.pin ? ('od_' + targetPeer.pin) : targetPeer.id);
+      let conn = webrtcConnections.get(targetPeer.id) || webrtcConnections.get(targetPeerId) || (targetPeer.pin ? webrtcConnections.get(targetPeer.pin) : null);
 
-      if (conn && conn.dc && conn.dc.readyState === 'open') {
+      if (conn && conn.dc && (conn.dc.readyState === 'open' || conn.dc.open)) {
         return initiateWebRTCSendFiles(targetPeer, files, conn.dc);
       } else {
         // Enqueue files to automatically drain the moment DataChannel finishes opening
         pendingSendFilesQueue.set(targetPeer.id, { targetPeer, files });
+        if (targetPeer.pin) pendingSendFilesQueue.set('od_' + targetPeer.pin, { targetPeer, files });
+        if (targetPeerId) pendingSendFilesQueue.set(targetPeerId, { targetPeer, files });
 
-        if (!conn) {
+        // Connect via PeerJS broker for guaranteed instant WebRTC connection
+        let pConn = connectPeerViaPeerJS(targetPeer);
+        if (!pConn && !conn) {
           const roomCode = targetPeer.roomCode || targetPeer.pin || currentRemoteRoomCode;
           conn = createWebRTCPeerConnection(targetPeer.id, targetPeer, roomCode, true);
         }
@@ -1223,10 +1471,12 @@
         setTimeout(() => {
           if (pendingSendFilesQueue.has(targetPeer.id)) {
             pendingSendFilesQueue.delete(targetPeer.id);
-            if (progressModal) progressModal.style.display = 'none';
-            showToast(`⚠️ Direct P2P link to ${targetPeer.name} timed out. You can also pair instantly using their 6-digit PIN.`);
+            if (progressModal && progressModal.style.display !== 'none' && document.getElementById('progress-title').textContent.includes('Connecting')) {
+              progressModal.style.display = 'none';
+              showToast(`⚠️ Direct P2P link to ${targetPeer.name} timed out. You can also pair instantly using their 6-digit PIN.`);
+            }
           }
-        }, 12000);
+        }, 15000);
         return;
       }
     }
@@ -2011,10 +2261,14 @@
     document.getElementById('progress-title').textContent = 'Streaming Worldwide (P2P)...';
     document.getElementById('progress-target').textContent = `Direct WebRTC to ${targetPeer.name}`;
 
-    // Dynamic Fiber & Gigabit adaptive windowing (auto-detects fiber speed and scales throughput)
-    let currentChunkSize = 128 * 1024; // 128 KB base chunk size
-    let currentBufferThreshold = 8 * 1024 * 1024; // 8 MB base backpressure threshold
-    dc.bufferedAmountLowThreshold = currentBufferThreshold;
+    // Universal WebRTC safe chunk size (64 KB is guaranteed across iOS Safari, Android, and Desktop)
+    const currentChunkSize = 64 * 1024; // 64 KB universal WebRTC chunk size
+    const currentBufferThreshold = 4 * 1024 * 1024; // 4 MB backpressure threshold
+    try {
+      if ('bufferedAmountLowThreshold' in dc) {
+        dc.bufferedAmountLowThreshold = currentBufferThreshold;
+      }
+    } catch (e) {}
 
     let grandBytesSent = 0;
     const startTime = Date.now();
@@ -2053,10 +2307,20 @@
           // Backpressure flow control: pause if internal buffer exceeds threshold
           if (dc.bufferedAmount > currentBufferThreshold) {
             await new Promise(resolve => {
-              dc.onbufferedamountlow = () => {
-                dc.onbufferedamountlow = null;
+              let resolved = false;
+              const finish = () => {
+                if (resolved) return;
+                resolved = true;
+                clearInterval(checkInterval);
+                try { dc.onbufferedamountlow = null; } catch (e) {}
                 resolve();
               };
+              try { dc.onbufferedamountlow = finish; } catch (e) {}
+              const checkInterval = setInterval(() => {
+                if (dc.bufferedAmount <= currentBufferThreshold) {
+                  finish();
+                }
+              }, 40);
             });
           }
 
@@ -2072,26 +2336,13 @@
           grandBytesSent += buffer.byteLength;
           chunkIndex++;
 
-          // Real-time speed measurement & dynamic fiber throughput adaptation
+          // Real-time speed measurement
           const now = Date.now();
           const sampleDeltaMs = now - lastSampleTime;
 
           if (sampleDeltaMs >= 200 || offset >= file.size) {
             const bytesDelta = grandBytesSent - lastSampleBytes;
             const instantSpeed = sampleDeltaMs > 0 ? (bytesDelta / sampleDeltaMs) * 1000 : 0;
-            const instantMbps = (instantSpeed * 8) / 1000000;
-
-            // Auto-detect fiber speed: dynamically boost chunk size & buffer window
-            if (instantMbps >= 300 && currentChunkSize < 512 * 1024) {
-              currentChunkSize = 512 * 1024; // 512 KB chunks for 300Mbps+ / Gigabit Fiber
-              currentBufferThreshold = 24 * 1024 * 1024; // 24 MB backpressure
-              dc.bufferedAmountLowThreshold = currentBufferThreshold;
-            } else if (instantMbps >= 120 && currentChunkSize < 256 * 1024) {
-              currentChunkSize = 256 * 1024; // 256 KB chunks for 100-300 Mbps Fiber
-              currentBufferThreshold = 16 * 1024 * 1024; // 16 MB backpressure
-              dc.bufferedAmountLowThreshold = currentBufferThreshold;
-            }
-
             const percentage = Math.min(100, Math.round((grandBytesSent / totalSize) * 100));
 
             updateProgressDisplay({
@@ -2617,9 +2868,64 @@
   // --- Reusable Direct 6-Digit Pair Function ---
   async function directPairByPin(pin) {
     const cleanPin = (pin || '').toString().trim().replace(/\D/g, '');
-    if (cleanPin.length !== 6) return false;
+    if (cleanPin.length !== 6) {
+      showToast('Please enter a valid 6-digit PIN');
+      return false;
+    }
 
-    // First attempt: Local Wi-Fi / subnet pairing
+    if (cleanPin === myInfo.pin) {
+      showToast("⚠️ That's your own PIN!");
+      return false;
+    }
+
+    showToast(`🔍 Connecting to PIN #${cleanPin}...`);
+
+    // 1. PeerJS direct connection to od_XXXXXX (instant, bypasses Vercel multi-container limits)
+    if (typeof Peer !== 'undefined') {
+      if (!myPeer || myPeer.destroyed) {
+        initPeerJS(myInfo.pin);
+      }
+
+      if (myPeer) {
+        const targetPeerId = 'od_' + cleanPin;
+        let conn = peerJSConnections.get(targetPeerId);
+
+        if (!conn || !conn.open) {
+          try {
+            conn = myPeer.connect(targetPeerId, { reliable: true, serialization: 'none' });
+            setupPeerJSDataConnection(conn);
+          } catch (e) {}
+        }
+
+        if (conn) {
+          const success = await new Promise((resolve) => {
+            if (conn.open) return resolve(true);
+            const t = setTimeout(() => resolve(false), 4500);
+            conn.once('open', () => {
+              clearTimeout(t);
+              resolve(true);
+            });
+            conn.once('error', () => {
+              clearTimeout(t);
+              resolve(false);
+            });
+          });
+
+          if (success) {
+            playChime('incoming');
+            triggerHaptic('medium');
+            showToast(`✨ Connected to PIN #${cleanPin}! Tap avatar on radar to send.`);
+            const modalPinPair = document.getElementById('modal-pin-pair');
+            if (modalPinPair) modalPinPair.style.display = 'none';
+            const qrModal = document.getElementById('modal-qr');
+            if (qrModal) qrModal.style.display = 'none';
+            return true;
+          }
+        }
+      }
+    }
+
+    // 2. Serverless API / HTTP pairing fallback
     try {
       const res = await fetch('/api/pair-by-pin', {
         method: 'POST',
@@ -2632,6 +2938,7 @@
             os: myInfo.os,
             deviceType: myInfo.deviceType,
             pin: myInfo.pin,
+            peerId: myPeer ? myPeer.id : ('od_' + myInfo.pin),
             localLanIp: myInfo.localLanIp || undefined
           }
         })
@@ -2644,6 +2951,8 @@
         renderRadarPeers();
         playChime('incoming');
         showToast(`✨ Connected to ${targetPeer.name}! Tap avatar to send.`);
+        const modalPinPair = document.getElementById('modal-pin-pair');
+        if (modalPinPair) modalPinPair.style.display = 'none';
         if (!window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')) {
           joinRemoteRoom(cleanPin);
         }
@@ -2653,7 +2962,7 @@
       console.warn('Local PIN pair attempt:', err);
     }
 
-    // Second attempt: Worldwide WebRTC Room (Method 2)
+    // 3. Worldwide WebRTC Room fallback
     try {
       const remoteJoined = await joinRemoteRoom(cleanPin);
       if (remoteJoined) return true;
@@ -2661,7 +2970,7 @@
       console.warn('Worldwide room PIN join attempt:', err);
     }
 
-    showToast(`❌ Device or Worldwide Room PIN not found`);
+    showToast(`❌ Device with PIN #${cleanPin} not found or offline.`);
     return false;
   }
 
