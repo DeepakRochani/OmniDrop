@@ -35,6 +35,11 @@
     </div>
 
     <div class="header-actions">
+      <div class="e2ee-indicator glass" id="net-speed-badge" title="Automatic Speed Detection & Fiber Scaling">
+        <span class="e2ee-dot" style="background: #10b981; box-shadow: 0 0 8px #10b981;"></span>
+        <span class="action-label" id="net-speed-label">⚡ Auto Speed</span>
+      </div>
+
       <div class="e2ee-indicator glass" title="Direct Peer-to-Peer Transfer (No Cloud)">
         <span class="e2ee-dot"></span>
         <span class="action-label">Local P2P</span>
@@ -131,11 +136,18 @@
           <span>Folder</span>
         </button>
 
-        <button class="secondary-btn glass" id="btn-quick-text" title="Share text or link">
+        <button class="secondary-btn glass" id="btn-quick-text" title="AirDrop Continuity & Text">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
           </svg>
           <span>Text</span>
+        </button>
+
+        <button class="secondary-btn glass" id="btn-beam-clipboard" title="Beam clipboard to all devices">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+          </svg>
+          <span>Clipboard</span>
         </button>
       </div>
     </div>
@@ -151,10 +163,11 @@
         </button>
       </div>
 
-      <!-- Tabs: Local Wi-Fi vs Hotspot -->
+      <!-- Tabs: Local Wi-Fi vs Hotspot vs Remote P2P -->
       <div class="modal-tabs">
         <button class="modal-tab active" id="tab-qr-wifi">Same Wi-Fi</button>
-        <button class="modal-tab" id="tab-qr-hotspot">No Wi-Fi / Hotspot</button>
+        <button class="modal-tab" id="tab-qr-hotspot">Hotspot</button>
+        <button class="modal-tab" id="tab-qr-remote">🌐 Remote (Anywhere)</button>
       </div>
 
       <div class="modal-body text-center" id="qr-body-wifi">
@@ -180,6 +193,45 @@
           <!-- Hotspot QR rendered here -->
         </div>
         <p class="qr-tip">⚡ iPhone and Android will prompt "Join Wi-Fi Network" upon scanning!</p>
+      </div>
+
+      <!-- Tab 3: Remote / Anywhere in the World (WebRTC P2P) -->
+      <div class="modal-body text-center" id="qr-body-remote" style="display:none;">
+        <p class="modal-desc">Send &amp; receive large files to another city or country with direct WebRTC encrypted peer-to-peer streaming:</p>
+        
+        <div class="remote-action-card glass" style="padding:14px;border-radius:14px;margin-bottom:12px;background:rgba(255,255,255,0.04);">
+          <div style="font-size:12px;font-weight:600;color:var(--accent-cyan);margin-bottom:6px;">SHARE YOUR ROOM</div>
+          <button class="primary-btn full-width" id="btn-create-remote-room" style="padding:10px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+            <span>Create Remote Share Link</span>
+          </button>
+
+          <div id="remote-created-box" style="display:none;margin-top:12px;">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">ROOM CODE:</div>
+            <div id="remote-room-code-display" style="font-size:22px;font-weight:700;color:var(--accent-cyan);letter-spacing:4px;margin-bottom:10px;">------</div>
+            
+            <div class="qr-canvas-container" id="qr-output-remote" style="margin:10px auto;"></div>
+
+            <div class="qr-url-box" style="margin-top:8px;">
+              <span id="remote-url-text" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">https://...</span>
+              <button class="copy-btn" id="btn-copy-remote-url">Copy</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px;">
+              <button class="secondary-btn glass full-width" id="btn-share-remote-native" style="padding:8px 12px;font-size:12px;">
+                <span>Share Link via App ↗</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="remote-action-card glass" style="padding:14px;border-radius:14px;background:rgba(255,255,255,0.04);">
+          <div style="font-size:12px;font-weight:600;color:#e2e8f0;margin-bottom:6px;">JOIN ANOTHER ROOM</div>
+          <div style="display:flex;gap:8px;">
+            <input type="tel" id="remote-join-code-input" maxlength="6" class="glass-input" placeholder="6-digit Room PIN..." style="margin-bottom:0;" autocomplete="off" />
+            <button class="primary-btn" id="btn-join-remote-code" style="padding:8px 16px;white-space:nowrap;font-size:12px;">Join</button>
+          </div>
+        </div>
+        <p class="qr-tip" style="margin-top:10px;">🔒 End-to-end encrypted direct browser streaming (No file size limits).</p>
       </div>
     </div>
   </div>
@@ -265,23 +317,90 @@
     </div>
   </div>
 
-  <!-- MODAL: Instant Text Share -->
+  <!-- MODAL: AirDrop Continuity & Instant Text Share -->
   <div class="modal-backdrop" id="modal-text" style="display:none;">
-    <div class="modal-card glass">
+    <div class="modal-card glass modal-text-card">
       <div class="modal-header">
-        <h3>Share Text or Link</h3>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div class="continuity-header-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+          </div>
+          <h3>AirDrop Continuity</h3>
+        </div>
         <button class="modal-close" id="btn-close-text" aria-label="Close">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
-      <div class="modal-body">
-        <p class="modal-desc">Send text directly to clipboard of nearby device:</p>
-        <textarea id="text-share-input" class="glass-input" rows="4" placeholder="Paste link, message, code snippet, or address..."></textarea>
-        <div class="target-peer-select">
+
+      <!-- Mode Switcher Tabs -->
+      <div class="modal-tabs" style="margin-bottom:14px;">
+        <button class="modal-tab active" id="tab-text-compose">Compose / Send</button>
+        <button class="modal-tab" id="tab-text-snippets">
+          <span>Recent Snippets</span>
+          <span class="tab-badge" id="snippets-tab-badge" style="display:none;">0</span>
+        </button>
+      </div>
+
+      <!-- TAB 1: Compose / Send -->
+      <div class="modal-body" id="view-text-compose">
+        <!-- Quick tool buttons -->
+        <div class="text-tools-strip">
+          <button type="button" class="text-tool-btn glass" id="btn-paste-clipboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+            <span>Paste Clipboard</span>
+          </button>
+          <button type="button" class="text-tool-btn glass" id="btn-beam-now">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            <span>Beam Now</span>
+          </button>
+          <button type="button" class="text-tool-btn glass" id="btn-clear-text" title="Clear input">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="textarea-container">
+          <textarea id="text-share-input" class="glass-input text-flow-input" rows="4" placeholder="Paste link, message, code snippet, note, or address..."></textarea>
+          <!-- Metadata status bar -->
+          <div class="text-meta-strip">
+            <div id="text-counter-display">0 words · 0 chars</div>
+            <div id="text-url-indicator" class="url-badge" style="display:none;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+              <span>Web Link</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="target-peer-select" style="margin-top:12px;">
           <label>Recipient:</label>
           <select id="text-target-select" class="glass-select"></select>
         </div>
-        <button class="primary-btn full-width" id="btn-send-text-action">Send to Device</button>
+
+        <button class="primary-btn full-width" id="btn-send-text-action" style="margin-top:14px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>Beam to Device(s)</span>
+        </button>
+      </div>
+
+      <!-- TAB 2: Recent Snippets -->
+      <div class="modal-body" id="view-text-snippets" style="display:none;">
+        <div class="snippets-shelf" id="snippets-shelf">
+          <!-- Injected dynamically -->
+        </div>
+
+        <div class="snippets-empty-state" id="snippets-empty-state">
+          <div class="empty-icon-bubble">📋</div>
+          <p>No recent snippets yet</p>
+          <span>Texts and links shared or received via AirDrop Continuity will appear here</span>
+        </div>
+
+        <div class="snippets-footer" id="snippets-footer" style="display:none;">
+          <button type="button" class="action-test-btn glass" id="btn-clear-all-snippets">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+            <span>Clear History</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -459,11 +578,65 @@
             </label>
           </div>
         </div>
+
+        <!-- Section: Universal AirDrop Continuity -->
+        <div class="settings-section">
+          <div class="settings-section-title">AIRDROP CONTINUITY</div>
+          <div class="settings-row flex-between">
+            <div>
+              <div class="setting-label">Auto-Copy to System Clipboard</div>
+              <div class="setting-sub">Automatically copy received text &amp; links</div>
+            </div>
+            <label class="ios-switch">
+              <input type="checkbox" id="setting-auto-clipboard" checked />
+              <span class="ios-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Section: Supabase Cloud Realtime Signaling -->
+        <div class="settings-section">
+          <div class="settings-section-title">SUPABASE CLOUD SIGNALING</div>
+          <div class="settings-row flex-between">
+            <div>
+              <div class="setting-label">Project Connection</div>
+              <div class="setting-sub" id="supabase-status-desc">Connected: <code>eqsjbadswzvfkrkdnnra</code></div>
+            </div>
+            <span id="supabase-status-badge" style="font-size:11px;font-weight:700;color:#10b981;background:rgba(16,185,129,0.15);padding:3px 8px;border-radius:8px;">ACTIVE</span>
+          </div>
+          <div class="settings-row" style="margin-top:8px;">
+            <div class="setting-sub" style="margin-bottom:6px;">Supabase Anon Key (for client-side WebSocket relay):</div>
+            <div class="settings-input-wrap">
+              <input type="password" id="setting-supabase-anon-key" class="glass-input" placeholder="eyJh..." />
+              <button id="btn-save-supabase-key" class="secondary-btn" style="padding:8px 14px;border-radius:12px;font-size:12px;white-space:nowrap;">Save Key</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section: Worldwide WebRTC & Cloud Deployment -->
+        <div class="settings-section">
+          <div class="settings-section-title">WORLDWIDE WEBRTC P2P</div>
+          <div class="settings-row flex-between">
+            <div>
+              <div class="setting-label">STUN Traversal Relay</div>
+              <div class="setting-sub">Google Global STUN (Worldwide Active)</div>
+            </div>
+            <span style="font-size:11px;font-weight:700;color:#10b981;background:rgba(16,185,129,0.15);padding:3px 8px;border-radius:8px;">READY</span>
+          </div>
+          <div class="settings-row flex-between" style="margin-top:8px;">
+            <div>
+              <div class="setting-label">Platform Compatibility</div>
+              <div class="setting-sub">Vercel, Supabase, GitHub Pages, Electron, APK</div>
+            </div>
+            <span style="font-size:11px;font-weight:700;color:var(--accent-cyan);background:rgba(56,189,248,0.15);padding:3px 8px;border-radius:8px;">UNIVERSAL</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 
   <script src="/qrcode.js"></script>
+  <script src="/supabase-client.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

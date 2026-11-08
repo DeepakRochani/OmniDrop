@@ -52,7 +52,17 @@ const peers = new Map(); // id -> { id, name, deviceType, os, ip, port, lastSeen
 const sseClients = new Map(); // clientId -> res
 const activeTransfers = new Map(); // transferId -> { id, sender, targetId, files, status, totalBytes, transferredBytes, resolveAccept }
 const receivedFilesHistory = [];
-const rooms = new Map(); // roomCode -> Set of { id, name, os, deviceType }
+const rooms = new Map(); // roomCode -> { code, peers: Map<peerId, peer>, createdAt }
+const roomSignals = new Map(); // clientId -> Array of signals for serverless/Vercel polling fallback
+
+function queueSignalForClient(clientId, data) {
+  if (!roomSignals.has(clientId)) {
+    roomSignals.set(clientId, []);
+  }
+  const q = roomSignals.get(clientId);
+  q.push(data);
+  if (q.length > 100) q.shift();
+}
 
 // Direct 6-Digit PIN Pairing Registry
 let hostPin = Math.floor(100000 + Math.random() * 900000).toString();
@@ -361,6 +371,25 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// Format transfer speed helper with automatic Mbps & Fiber detection
+function formatTransferSpeed(bytesPerSec) {
+  if (!bytesPerSec || bytesPerSec <= 0) return '0 B/s (0 Mbps)';
+  const mbps = (bytesPerSec * 8) / 1000000;
+  const byteSpeed = `${formatBytes(bytesPerSec)}/s`;
+
+  if (mbps >= 800) {
+    const val = mbps >= 1000 ? (mbps / 1000).toFixed(1) + ' Gbps' : Math.round(mbps) + ' Mbps';
+    return `${byteSpeed} (${val} 🚀 Gigabit Fiber)`;
+  }
+  if (mbps >= 100) {
+    return `${byteSpeed} (${Math.round(mbps)} Mbps ⚡ Fiber)`;
+  }
+  if (mbps >= 1) {
+    return `${byteSpeed} (${mbps.toFixed(1)} Mbps)`;
+  }
+  return `${byteSpeed} (${(mbps * 1000).toFixed(0)} Kbps)`;
+}
+
 // --- Request Handler ---
 function handleRequest(req, res) {
   // Enable CORS for local cross-device requests
@@ -520,7 +549,12 @@ function handleRequest(req, res) {
     parseJsonBody(req).then(data => {
       const clientIp = req.socket.remoteAddress.replace(/^.*:/, '');
       const clientId = data.id || ('web_' + crypto.randomBytes(4).toString('hex'));
-      const clientPin = data.pin || deviceToPin.get(clientId) || Math.floor(100000 + Math.random() * 900000).toString();
+      let clientPin = data.pin || deviceToPin.get(clientId);
+      if (!clientPin) {
+        do {
+          clientPin = Math.floor(100000 + Math.random() * 900000).toString();
+        } while (pinToDevice.has(clientPin));
+      }
       const clientPeer = {
         id: clientId,
         name: data.name || (data.os ? `${data.os} Web Client` : 'Web Browser'),
@@ -592,12 +626,31 @@ function handleRequest(req, res) {
     return;
   }
 
-  // --- API: Internet / Cellular Room Signaling ---
+  // --- API: Internet / Cellular Room Signaling (WebRTC P2P Worldwide) ---
   if (req.method === 'POST' && pathname === '/api/room/create') {
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    rooms.set(code, new Map());
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, roomCode: code }));
+    parseJsonBody(req).then(data => {
+      let code;
+      do {
+        code = Math.floor(100000 + Math.random() * 900000).toString();
+      } while (rooms.has(code));
+
+      const roomPeers = new Map();
+      if (data && data.peer && data.peer.id) {
+        roomPeers.set(data.peer.id, data.peer);
+      }
+      rooms.set(code, { code, peers: roomPeers, createdAt: Date.now() });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, roomCode: code }));
+    }).catch(() => {
+      let code;
+      do {
+        code = Math.floor(100000 + Math.random() * 900000).toString();
+      } while (rooms.has(code));
+
+      rooms.set(code, { code, peers: new Map(), createdAt: Date.now() });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, roomCode: code }));
+    });
     return;
   }
 
@@ -606,19 +659,22 @@ function handleRequest(req, res) {
       const { roomCode, peer } = data;
       const room = rooms.get(roomCode);
       if (!room) {
-        res.writeHead(404);
-        res.end(JSON.stringify({ error: 'Room code not found' }));
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Room code not found or expired' }));
         return;
       }
-      room.set(peer.id, peer);
-      // Notify other peers in room
-      for (const [pid, p] of room.entries()) {
+      const existingPeers = Array.from(room.peers.values());
+      room.peers.set(peer.id, peer);
+
+      // Notify other peers in room via SSE and signal queue
+      for (const [pid, p] of room.peers.entries()) {
         if (pid !== peer.id) {
           sendSSEToClient(pid, 'room_peer_joined', { roomCode, peer });
+          queueSignalForClient(pid, { fromId: peer.id, signal: { type: 'room_peer_joined', roomCode, peer } });
         }
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, peers: Array.from(room.values()) }));
+      res.end(JSON.stringify({ ok: true, peers: existingPeers }));
     }).catch(err => {
       res.writeHead(400);
       res.end(JSON.stringify({ error: err.message }));
@@ -628,10 +684,107 @@ function handleRequest(req, res) {
 
   if (req.method === 'POST' && pathname === '/api/room/signal') {
     parseJsonBody(req).then(data => {
-      const { toId, fromId, signal } = data;
-      sendSSEToClient(toId, 'room_signal', { fromId, signal });
+      const { toId, fromId, signal, roomCode } = data;
+      sendSSEToClient(toId, 'room_signal', { fromId, signal, roomCode });
+      queueSignalForClient(toId, { fromId, signal, roomCode });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
+    }).catch(err => {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: err.message }));
+    });
+    return;
+  }
+
+  // Polling fallback endpoint for serverless/Vercel environments without persistent SSE
+  if (req.method === 'GET' && pathname === '/api/room/signals') {
+    const clientId = parsedUrl.searchParams.get('clientId');
+    if (!clientId) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: 'Missing clientId' }));
+      return;
+    }
+    const signals = roomSignals.get(clientId) || [];
+    roomSignals.delete(clientId);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, signals }));
+    return;
+  }
+
+  // --- API: Universal Clipboard Sync / Broadcast (AirDrop Continuity) ---
+  if (req.method === 'POST' && pathname === '/api/clipboard/sync') {
+    parseJsonBody(req).then(async data => {
+      const { text, targetId, broadcast } = data;
+      if (!text || typeof text !== 'string') {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Missing text parameter' }));
+        return;
+      }
+
+      const isUrl = /^https?:\/\/[^\s]+$/i.test(text.trim());
+      const sender = { id: deviceId, name: deviceName, os: detectedOS };
+      const payload = {
+        sender,
+        text: text.trim(),
+        isUrl,
+        timestamp: Date.now()
+      };
+
+      // Broadcast to local web clients via SSE
+      broadcastSSE('clipboard_received', payload);
+
+      // Forward to other devices on the network
+      if (broadcast || !targetId || targetId === 'all') {
+        for (const [pId, peer] of peers.entries()) {
+          if (peer.ip && peer.port && peer.id !== deviceId && !peer.isWeb) {
+            try {
+              const postData = JSON.stringify(payload);
+              const clientReq = http.request({
+                hostname: peer.ip,
+                port: peer.port,
+                path: '/api/receive/text',
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Content-Length': Buffer.byteLength(postData)
+                },
+                timeout: 3000
+              });
+              clientReq.on('error', () => {});
+              clientReq.write(postData);
+              clientReq.end();
+            } catch (e) {}
+          }
+        }
+      } else {
+        const peer = peers.get(targetId);
+        if (peer) {
+          if (peer.isWeb && sseClients.has(targetId)) {
+            sendSSEToClient(targetId, 'clipboard_received', payload);
+          } else if (peer.ip && peer.port) {
+            try {
+              const postData = JSON.stringify(payload);
+              const clientReq = http.request({
+                hostname: peer.ip,
+                port: peer.port,
+                path: '/api/receive/text',
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Content-Length': Buffer.byteLength(postData)
+                },
+                timeout: 4000
+              });
+              clientReq.on('error', () => {});
+              clientReq.write(postData);
+              clientReq.end();
+            } catch (e) {}
+          }
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, isUrl }));
     }).catch(err => {
       res.writeHead(400);
       res.end(JSON.stringify({ error: err.message }));
@@ -642,19 +795,69 @@ function handleRequest(req, res) {
   // --- API: Send Instant Text / Clipboard ---
   if (req.method === 'POST' && pathname === '/api/send/text') {
     parseJsonBody(req).then(async data => {
-      const { targetIp, targetPort, text, senderName } = data;
-      if (!targetIp || !targetPort || !text) {
+      const { targetIp, targetPort, targetId, text, broadcast } = data;
+      if (!text) {
         res.writeHead(400);
-        res.end(JSON.stringify({ error: 'Missing parameters' }));
+        res.end(JSON.stringify({ error: 'Missing text content' }));
+        return;
+      }
+
+      const isUrl = /^https?:\/\/[^\s]+$/i.test(text.trim());
+      const sender = { id: deviceId, name: deviceName, os: detectedOS };
+      const payload = {
+        sender,
+        text: text.trim(),
+        isUrl,
+        timestamp: Date.now()
+      };
+
+      if (broadcast || targetId === 'all' || (!targetIp && !targetId)) {
+        // Broadcast to local SSE clients
+        broadcastSSE('clipboard_received', payload);
+
+        // Forward to all active remote peers
+        for (const [pId, peer] of peers.entries()) {
+          if (peer.ip && peer.port && peer.id !== deviceId && !peer.isWeb) {
+            try {
+              const postData = JSON.stringify(payload);
+              const clientReq = http.request({
+                hostname: peer.ip,
+                port: peer.port,
+                path: '/api/receive/text',
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Content-Length': Buffer.byteLength(postData)
+                },
+                timeout: 3000
+              });
+              clientReq.on('error', () => {});
+              clientReq.write(postData);
+              clientReq.end();
+            } catch (e) {}
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, broadcast: true, isUrl }));
+        return;
+      }
+
+      // Check if target is a web peer connected directly to this server
+      if (targetId && sseClients.has(targetId)) {
+        sendSSEToClient(targetId, 'clipboard_received', payload);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, isUrl }));
+        return;
+      }
+
+      if (!targetIp || !targetPort) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Missing target device address' }));
         return;
       }
 
       // Forward text directly to target device HTTP endpoint
-      const postData = JSON.stringify({
-        sender: { id: deviceId, name: deviceName, os: detectedOS },
-        text: text,
-        timestamp: Date.now()
-      });
+      const postData = JSON.stringify(payload);
 
       const clientReq = http.request({
         hostname: targetIp,
@@ -671,7 +874,7 @@ function handleRequest(req, res) {
         targetRes.on('data', c => respBody += c);
         targetRes.on('end', () => {
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: true }));
+          res.end(JSON.stringify({ ok: true, isUrl }));
         });
       });
 
@@ -692,9 +895,11 @@ function handleRequest(req, res) {
   // --- API: Receive Text Endpoint (Target Device) ---
   if (req.method === 'POST' && pathname === '/api/receive/text') {
     parseJsonBody(req).then(data => {
+      const isUrl = data.isUrl ?? /^https?:\/\/[^\s]+$/i.test((data.text || '').trim());
       broadcastSSE('clipboard_received', {
         sender: data.sender || { name: 'Nearby Device' },
         text: data.text,
+        isUrl: !!isUrl,
         timestamp: data.timestamp || Date.now()
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -852,7 +1057,7 @@ function handleRequest(req, res) {
           fileTotal: fileMeta.size,
           totalTransferred: transfer.transferredBytes,
           totalSize: transfer.totalSize,
-          speedFormatted: formatBytes(speedBytesPerSec) + '/s',
+          speedFormatted: formatTransferSpeed(speedBytesPerSec),
           percentage: Math.min(100, Math.round((transfer.transferredBytes / transfer.totalSize) * 100))
         });
 
@@ -980,6 +1185,13 @@ function handleRequest(req, res) {
     if (cmd) exec(cmd);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, path: DOWNLOADS_DIR }));
+    return;
+  }
+
+  // --- Native Web Share Target HTTP Fallback ---
+  if (pathname === '/share-target') {
+    res.writeHead(303, { Location: '/?shared=1' });
+    res.end();
     return;
   }
 

@@ -307,9 +307,69 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 
+  // --- Format Transfer Speed Helper (Auto Mbps & Fiber Detection) ---
+  function formatTransferSpeed(bytesPerSec) {
+    if (!bytesPerSec || bytesPerSec <= 0) return '0 B/s (0 Mbps)';
+    const mbps = (bytesPerSec * 8) / 1000000;
+    const byteSpeed = `${formatBytes(bytesPerSec)}/s`;
+
+    if (mbps >= 800) {
+      const val = mbps >= 1000 ? (mbps / 1000).toFixed(1) + ' Gbps' : Math.round(mbps) + ' Mbps';
+      return `${byteSpeed} (${val} 🚀 Gigabit Fiber)`;
+    }
+    if (mbps >= 100) {
+      return `${byteSpeed} (${Math.round(mbps)} Mbps ⚡ Fiber)`;
+    }
+    if (mbps >= 1) {
+      return `${byteSpeed} (${mbps.toFixed(1)} Mbps)`;
+    }
+    return `${byteSpeed} (${(mbps * 1000).toFixed(0)} Kbps)`;
+  }
+
+  // --- Automatic Network / Internet Speed Detector ---
+  function detectNetworkCapabilities() {
+    const netLabel = document.getElementById('net-speed-label');
+    const netBadge = document.getElementById('net-speed-badge');
+    if (!netLabel) return;
+
+    if (navigator.connection) {
+      const conn = navigator.connection;
+      const updateNetBadge = () => {
+        const downlink = conn.downlink || 0; // Downlink in Mbps
+        const type = conn.effectiveType || '';
+        const rtt = conn.rtt || 0;
+
+        if (downlink >= 10) {
+          netLabel.textContent = `⚡ Fiber Ready (${downlink >= 10 ? '100M+' : downlink + 'M'})`;
+          if (netBadge) netBadge.title = `High-Speed Connection Detected (~${downlink} Mbps downlink, ${rtt}ms RTT). Automatic chunk scaling active.`;
+        } else if (downlink >= 2) {
+          netLabel.textContent = `📶 High Speed (${downlink} Mbps)`;
+        } else if (type) {
+          netLabel.textContent = `📶 ${type.toUpperCase()}`;
+        }
+      };
+
+      updateNetBadge();
+      conn.addEventListener('change', updateNetBadge);
+    } else {
+      netLabel.textContent = '⚡ Gigabit/Fiber Auto';
+    }
+  }
+
   // --- Toast Notifications ---
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   function showToast(text, duration = 3500) {
     const container = document.getElementById('toast-container');
+    if (!container) return;
     const toast = document.createElement('div');
     toast.className = 'toast';
     toast.style.cursor = 'pointer';
@@ -321,6 +381,59 @@
     });
     container.appendChild(toast);
 
+    setTimeout(() => {
+      if (!toast.parentNode) return;
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(10px)';
+      toast.style.transition = 'all 0.3s ease';
+      setTimeout(() => toast.remove(), 300);
+    }, duration);
+  }
+
+  function showRichToast({ title, preview, isUrl, url, onCopy, duration = 6500 }) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-rich';
+
+    let actionButtonsHtml = '';
+    if (isUrl && url) {
+      actionButtonsHtml += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="toast-btn toast-btn-primary">🔗 Open Link ↗</a>`;
+    }
+    actionButtonsHtml += `<button type="button" class="toast-btn btn-toast-copy">📋 Copy</button>`;
+    actionButtonsHtml += `<button type="button" class="toast-btn btn-toast-view">💬 View Text</button>`;
+
+    toast.innerHTML = `
+      <div class="toast-row">
+        <strong style="color:var(--accent-cyan);font-size:12px;">${escapeHtml(title)}</strong>
+      </div>
+      <div class="toast-preview-text">"${escapeHtml(preview)}"</div>
+      <div class="toast-actions-strip">
+        ${actionButtonsHtml}
+      </div>
+    `;
+
+    const copyBtn = toast.querySelector('.btn-toast-copy');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (onCopy) onCopy();
+        copyBtn.textContent = 'Copied! ✓';
+        setTimeout(() => { if (copyBtn) copyBtn.textContent = '📋 Copy'; }, 1500);
+      });
+    }
+
+    const viewBtn = toast.querySelector('.btn-toast-view');
+    if (viewBtn) {
+      viewBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openTextModal(preview);
+        toast.remove();
+      });
+    }
+
+    container.appendChild(toast);
     setTimeout(() => {
       if (!toast.parentNode) return;
       toast.style.opacity = '0';
@@ -343,15 +456,116 @@
     sessionStorage.setItem('omnidrop_client_id', myClientId);
   } catch (e) {}
 
+  // --- Worldwide WebRTC P2P Configuration & State ---
+  const RTC_CONFIG = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' }
+    ]
+  };
+
+  const webrtcConnections = new Map(); // key: peerId -> { pc, dc, peer, roomCode, pendingCandidates: [], isInitiator: boolean }
+  let currentRemoteRoomCode = null;
+  let roomPollingTimer = null;
+  let activeWebRTCOutgoing = null;
+  let currentWebRTCReceiving = null;
+
+  // --- Background Transfer Keepalive & Screen Wake Lock ---
+  let activeWakeLock = null;
+  let backgroundAudioCtx = null;
+
+  async function acquireTransferWakeLock() {
+    // 1. Desktop App Mode: Native OS-level PowerSaveBlocker (macOS, Windows, Linux)
+    try {
+      if (window.electronAPI && window.electronAPI.acquireWakeLock) {
+        window.electronAPI.acquireWakeLock();
+      }
+    } catch (e) {}
+
+    // 2. Native Android APK / iOS App Mode: Capacitor KeepAwake Plugin
+    try {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.KeepAwake) {
+        window.Capacitor.Plugins.KeepAwake.keepAwake();
+      }
+    } catch (e) {}
+
+    // 3. Web & Mobile Browser Mode: W3C Screen Wake Lock API
+    try {
+      if ('wakeLock' in navigator && !activeWakeLock) {
+        activeWakeLock = await navigator.wakeLock.request('screen');
+        activeWakeLock.addEventListener('release', () => {
+          activeWakeLock = null;
+        });
+      }
+    } catch (e) {}
+
+    // 4. Silent Web Audio keepalive: prevents iOS Safari & Android from suspending WebRTC in background
+    try {
+      if (!backgroundAudioCtx && (window.AudioContext || window.webkitAudioContext)) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        backgroundAudioCtx = new AudioContextClass();
+        const osc = backgroundAudioCtx.createOscillator();
+        const gain = backgroundAudioCtx.createGain();
+        gain.gain.value = 0.00001; // Silent / Inaudible
+        osc.connect(gain);
+        gain.connect(backgroundAudioCtx.destination);
+        osc.start();
+      }
+    } catch (e) {}
+  }
+
+  function releaseTransferWakeLock() {
+    // 1. Desktop App Mode
+    try {
+      if (window.electronAPI && window.electronAPI.releaseWakeLock) {
+        window.electronAPI.releaseWakeLock();
+      }
+    } catch (e) {}
+
+    // 2. Native Android APK / iOS App Mode
+    try {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.KeepAwake) {
+        window.Capacitor.Plugins.KeepAwake.allowSleep();
+      }
+    } catch (e) {}
+
+    // 3. Screen Wake Lock
+    try {
+      if (activeWakeLock) {
+        activeWakeLock.release().catch(() => {});
+        activeWakeLock = null;
+      }
+    } catch (e) {}
+
+    // 4. Background Web Audio
+    try {
+      if (backgroundAudioCtx) {
+        backgroundAudioCtx.close().catch(() => {});
+        backgroundAudioCtx = null;
+      }
+    } catch (e) {}
+  }
+
+  // Re-acquire wake lock if user returns to page during active transfer
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && (activeWebRTCOutgoing || currentWebRTCReceiving || activeOutgoingTransfer || activeIncomingTransfer)) {
+      acquireTransferWakeLock();
+    }
+  });
+
   // Get active nearby peers deduplicated by physical device (IP + OS)
   function getActiveUniquePeers() {
     const unique = new Map();
     for (const peer of peersMap.values()) {
       if (peer.id === myInfo.id || peer.id === myClientId) continue;
       // Deduplicate by IP address if present, otherwise by ID
-      const key = (peer.ip && peer.ip !== '127.0.0.1' && peer.ip !== 'localhost' && peer.ip !== 'Connected')
-        ? `${peer.ip}_${peer.os || ''}`
-        : peer.id;
+      const key = (peer.isRemote || peer.isWebRTC)
+        ? peer.id
+        : ((peer.ip && peer.ip !== '127.0.0.1' && peer.ip !== 'localhost' && peer.ip !== 'Connected')
+            ? `${peer.ip}_${peer.os || ''}`
+            : peer.id);
       unique.set(key, peer);
     }
     return Array.from(unique.values());
@@ -486,14 +700,25 @@
       }
     });
 
-    // When someone joins our 4G/Cellular Room
+    // When someone joins our Worldwide WebRTC Room
     eventSource.addEventListener('room_peer_joined', e => {
-      const data = JSON.parse(e.data);
-      if (data.peer && data.peer.id !== (myInfo.id || myClientId)) {
-        peersMap.set(data.peer.id, data.peer);
-        renderRadarPeers();
-        playChime('incoming');
-        showToast(`⚡ ${data.peer.name} joined room via Mobile Data!`);
+      try {
+        const data = JSON.parse(e.data);
+        if (data.peer && data.peer.id !== (myInfo.id || myClientId)) {
+          handleRemotePeerJoined(data.peer, data.roomCode);
+        }
+      } catch (err) {
+        console.error('Failed to parse room_peer_joined:', err);
+      }
+    });
+
+    // Incoming WebRTC signaling (offer, answer, ICE candidates)
+    eventSource.addEventListener('room_signal', e => {
+      try {
+        const data = JSON.parse(e.data);
+        handleWebRTCSignal(data);
+      } catch (err) {
+        console.error('Failed to parse room_signal:', err);
       }
     });
 
@@ -524,12 +749,40 @@
       handleIncomingFilesComplete(comp);
     });
 
-    // Received instant text/clipboard
+    // Received instant text/clipboard (Universal AirDrop Continuity)
     eventSource.addEventListener('clipboard_received', e => {
       const data = JSON.parse(e.data);
       playChime('incoming');
-      navigator.clipboard?.writeText(data.text);
-      showToast(`📋 Received from ${data.sender.name}: "${data.text.slice(0, 40)}..." (Copied to clipboard)`);
+      triggerHaptic('medium');
+
+      // Auto-copy to system clipboard if enabled
+      const autoClip = document.getElementById('setting-auto-clipboard')?.checked ?? true;
+      if (autoClip && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(data.text).catch(() => {});
+      }
+
+      // Save to snippets history
+      saveSnippet({
+        text: data.text,
+        isUrl: data.isUrl,
+        sender: data.sender,
+        direction: 'received',
+        timestamp: data.timestamp || Date.now()
+      });
+
+      const senderName = data.sender?.name || 'Nearby Device';
+      const preview = data.text.length > 55 ? data.text.slice(0, 52) + '...' : data.text;
+
+      showRichToast({
+        title: `📋 AirDrop Continuity from ${senderName}`,
+        preview: preview,
+        isUrl: data.isUrl,
+        url: data.isUrl ? data.text : null,
+        onCopy: () => {
+          navigator.clipboard?.writeText(data.text).catch(() => {});
+          triggerHaptic('light');
+        }
+      });
     });
 
     eventSource.onerror = () => {
@@ -549,8 +802,9 @@
 
       let hasChanges = false;
 
-      // Remove any peers that left or are no longer active
-      for (const [id] of peersMap.entries()) {
+      // Remove any peers that left or are no longer active (preserves WebRTC remote peers)
+      for (const [id, peer] of peersMap.entries()) {
+        if (peer && (peer.isRemote || peer.isWebRTC)) continue;
         if (!currentIds.has(id)) {
           peersMap.delete(id);
           hasChanges = true;
@@ -580,6 +834,117 @@
   // Background registration heartbeat every 10 seconds to maintain persistent presence
   setInterval(registerWithHost, 10000);
 
+  // --- Web Share Target API: IndexedDB Retrieval ---
+  function openShareDB() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('omnidrop_share_db', 1);
+      request.onupgradeneeded = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('shares')) {
+          db.createObjectStore('shares', { keyPath: 'id' });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async function getPendingShareData() {
+    try {
+      const db = await openShareDB();
+      return new Promise((resolve) => {
+        const tx = db.transaction('shares', 'readwrite');
+        const store = tx.objectStore('shares');
+        const req = store.get('pending_share');
+        req.onsuccess = () => {
+          const res = req.result;
+          if (res) {
+            store.delete('pending_share');
+          }
+          resolve(res || null);
+        };
+        req.onerror = () => resolve(null);
+      });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  let pendingShareFiles = null;
+
+  async function checkPendingShareTarget() {
+    const isSharedParam = window.location.search.includes('shared=1');
+    const shareData = await getPendingShareData();
+
+    if (isSharedParam) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    if (!shareData) return;
+
+    playChime('incoming');
+    triggerHaptic('medium');
+
+    // 1. If files were shared (from Photos, Files, Gallery, etc.)
+    if (shareData.files && shareData.files.length > 0) {
+      pendingShareFiles = shareData.files;
+      const count = pendingShareFiles.length;
+      showToast(`📥 Received ${count} item${count > 1 ? 's' : ''} from Share Sheet! Tap a device on the radar to beam.`);
+
+      const peerList = getActiveUniquePeers();
+      if (peerList.length === 1) {
+        initiateSendFiles(peerList[0], pendingShareFiles);
+        pendingShareFiles = null;
+      } else if (peerList.length > 1) {
+        openTargetPickerWithFiles(pendingShareFiles);
+      }
+      return;
+    }
+
+    // 2. If text or URL was shared (from Safari, Chrome, WhatsApp, etc.)
+    const sharedText = shareData.url || shareData.text || shareData.title || '';
+    if (sharedText.trim()) {
+      openTextModal(sharedText.trim());
+      showToast('📥 Link/Text received from Share Sheet!');
+    }
+  }
+
+  function openTargetPickerWithFiles(files) {
+    pendingShareFiles = files;
+    const peerList = getActiveUniquePeers();
+    if (peerList.length === 0) {
+      showToast('No nearby devices found. Tap "Connect Phone" to scan QR code!');
+      return;
+    }
+    const pickerList = document.getElementById('picker-list');
+    pickerList.innerHTML = peerList.map(peer => `
+      <div class="picker-device-item" data-id="${peer.id}">
+        <div class="peer-avatar" style="width:40px;height:40px;">
+          ${getDeviceIconSvg(peer.os, peer.deviceType)}
+        </div>
+        <div>
+          <div style="font-weight:600;font-size:14px;">${peer.name}</div>
+          <div style="font-size:11px;color:var(--text-muted);">${peer.ip || (peer.pin ? 'PIN ' + peer.pin : 'Nearby')}</div>
+        </div>
+      </div>
+    `).join('');
+
+    pickerList.querySelectorAll('.picker-device-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const id = el.dataset.id;
+        const peer = peersMap.get(id);
+        document.getElementById('modal-target-picker').style.display = 'none';
+        if (peer && pendingShareFiles) {
+          const toSend = pendingShareFiles;
+          pendingShareFiles = null;
+          initiateSendFiles(peer, toSend);
+        }
+      });
+    });
+
+    document.getElementById('modal-target-picker').style.display = 'flex';
+  }
+
   // --- Auto-Reconnection & Screen Unlock / Wake-Up Lifecycle ---
   let isResuming = false;
   async function handleWakeUpAndResume() {
@@ -598,6 +963,9 @@
 
       // 3. Immediately fetch peers to update radar without waiting for interval
       await fetchPeers();
+
+      // 4. Check for any pending native shares
+      checkPendingShareTarget();
     } catch (err) {
       console.warn('[OmniDrop] Wake-up sync error:', err);
     } finally {
@@ -647,19 +1015,28 @@
       const y = 50 + radiusPercent * Math.sin(angle);
 
       let node = container.querySelector(`.peer-node[data-id="${peer.id}"]`);
+      const isRemote = Boolean(peer.isWebRTC || peer.isRemote);
+      const expectedSub = isRemote
+        ? (peer.roomCode ? `🌐 Room #${peer.roomCode}` : '🌐 Worldwide P2P')
+        : (peer.ip && peer.ip !== 'undefined' ? peer.ip : (peer.pin ? 'PIN: ' + peer.pin : 'Nearby'));
+
       if (node) {
         // Node already exists: update coordinates and details smoothly without recreation or re-animation!
         node.style.left = `${x}%`;
         node.style.top = `${y}%`;
+        if (isRemote) {
+          node.classList.add('peer-remote');
+        } else {
+          node.classList.remove('peer-remote');
+        }
         const nameEl = node.querySelector('.peer-name');
         if (nameEl && nameEl.textContent !== peer.name) nameEl.textContent = peer.name;
         const subEl = node.querySelector('.peer-sub');
-        const expectedSub = peer.ip && peer.ip !== 'undefined' ? peer.ip : (peer.pin ? 'PIN: ' + peer.pin : 'Nearby');
         if (subEl && subEl.textContent !== expectedSub) subEl.textContent = expectedSub;
       } else {
         // Brand new peer: construct node and animate once on entry
         node = document.createElement('div');
-        node.className = 'peer-node peer-entering';
+        node.className = 'peer-node peer-entering' + (isRemote ? ' peer-remote' : '');
         node.style.left = `${x}%`;
         node.style.top = `${y}%`;
         node.dataset.id = peer.id;
@@ -667,15 +1044,21 @@
         node.innerHTML = `
           <div class="peer-avatar">
             ${getDeviceIconSvg(peer.os, peer.deviceType)}
-            <span class="peer-badge">${getOsBadge(peer.os)}</span>
+            <span class="peer-badge ${isRemote ? 'peer-badge-remote' : ''}">${isRemote ? '🌐' : getOsBadge(peer.os)}</span>
           </div>
           <span class="peer-name">${peer.name}</span>
-          <span class="peer-sub">${peer.ip && peer.ip !== 'undefined' ? peer.ip : (peer.pin ? 'PIN: ' + peer.pin : 'Nearby')}</span>
+          <span class="peer-sub">${expectedSub}</span>
         `;
 
         // Click to send files or text
         node.addEventListener('click', () => {
           currentTargetPeer = peer;
+          if (pendingShareFiles && pendingShareFiles.length > 0) {
+            const files = pendingShareFiles;
+            pendingShareFiles = null;
+            initiateSendFiles(peer, files);
+            return;
+          }
           triggerFilePickerForPeer(peer);
         });
 
@@ -720,6 +1103,17 @@
   // --- Send File Transfer Pipeline ---
   async function initiateSendFiles(targetPeer, files) {
     if (!files || files.length === 0) return;
+
+    // Check if target is connected via WebRTC P2P (Worldwide Remote)
+    if (targetPeer.isWebRTC || webrtcConnections.has(targetPeer.id)) {
+      const conn = webrtcConnections.get(targetPeer.id);
+      if (conn && conn.dc && conn.dc.readyState === 'open') {
+        return initiateWebRTCSendFiles(targetPeer, files, conn.dc);
+      } else {
+        showToast(`⚠️ WebRTC connection with ${targetPeer.name} is connecting... please wait`);
+        return;
+      }
+    }
 
     let totalSize = 0;
     const fileMetaList = files.map((f, idx) => {
@@ -851,10 +1245,12 @@
     playChime('incoming');
 
     document.getElementById('incoming-sender-icon').innerHTML = getDeviceIconSvg(req.sender.os, 'mobile');
-    document.getElementById('incoming-sender-title').textContent = `${req.sender.name} wants to share with you`;
+    document.getElementById('incoming-sender-title').textContent = req.isWebRTC
+      ? `${req.sender.name} (🌐 Worldwide P2P) wants to share`
+      : `${req.sender.name} wants to share with you`;
     document.getElementById('incoming-files-info').innerHTML = `
       <span class="file-count">${req.files.length} File(s)</span> &bull; 
-      <span class="file-size">${req.formattedSize}</span>
+      <span class="file-size">${req.formattedSize || formatBytes(req.totalSize || 0)}</span>
     `;
 
     const previewList = document.getElementById('incoming-file-items');
@@ -871,6 +1267,60 @@
   // Receiver clicks Accept
   document.getElementById('btn-incoming-accept').addEventListener('click', async () => {
     if (!pendingIncomingTransfer) return;
+
+    // Handle WebRTC direct DataChannel transfer accept
+    if (pendingIncomingTransfer.isWebRTC && pendingIncomingTransfer.dc) {
+      const currentTransfer = pendingIncomingTransfer;
+      document.getElementById('modal-incoming').style.display = 'none';
+
+      // Direct-to-Disk streaming for large files (enables 50GB, 150GB+ without RAM limits)
+      let fileStream = null;
+      if (window.showSaveFilePicker && currentTransfer.files.length === 1 && currentTransfer.totalSize > 25 * 1024 * 1024) {
+        try {
+          const handle = await window.showSaveFilePicker({ suggestedName: currentTransfer.files[0].name });
+          fileStream = await handle.createWritable();
+        } catch (e) {
+          // User dismissed picker or not supported; falls back smoothly to in-memory chunks
+        }
+      }
+
+      try {
+        currentTransfer.dc.send(JSON.stringify({
+          type: 'TRANSFER_RESPONSE',
+          transferId: currentTransfer.transferId,
+          accepted: true
+        }));
+      } catch (err) {
+        console.error('Failed to send WebRTC accept:', err);
+      }
+
+      currentWebRTCReceiving = {
+        transferId: currentTransfer.transferId,
+        sender: currentTransfer.sender,
+        files: currentTransfer.files,
+        totalSize: currentTransfer.totalSize,
+        totalFiles: currentTransfer.files.length,
+        currentFileIndex: 0,
+        currentFileName: '',
+        currentFileSize: 0,
+        currentFileType: 'application/octet-stream',
+        receivedFileBytes: 0,
+        totalReceivedBytes: 0,
+        fileBlobParts: [],
+        receivedBlobs: [],
+        fileStream: fileStream,
+        startTime: Date.now()
+      };
+
+      // Keep display and background connection active
+      acquireTransferWakeLock();
+
+      document.getElementById('progress-title').textContent = 'Receiving Worldwide (P2P)...';
+      document.getElementById('progress-target').textContent = `From ${currentTransfer.sender.name}`;
+      document.getElementById('modal-progress').style.display = 'flex';
+      return;
+    }
+
     activeIncomingTransfer = {
       transferId: pendingIncomingTransfer.transferId,
       sender: pendingIncomingTransfer.sender,
@@ -899,6 +1349,20 @@
   // Receiver clicks Decline
   document.getElementById('btn-incoming-decline').addEventListener('click', async () => {
     if (!pendingIncomingTransfer) return;
+
+    if (pendingIncomingTransfer.isWebRTC && pendingIncomingTransfer.dc) {
+      try {
+        pendingIncomingTransfer.dc.send(JSON.stringify({
+          type: 'TRANSFER_RESPONSE',
+          transferId: pendingIncomingTransfer.transferId,
+          accepted: false
+        }));
+      } catch (err) {}
+      document.getElementById('modal-incoming').style.display = 'none';
+      pendingIncomingTransfer = null;
+      return;
+    }
+
     document.getElementById('modal-incoming').style.display = 'none';
 
     try {
@@ -913,7 +1377,7 @@
     } catch (e) {}
   });
 
-  // Progress display update via SSE
+  // Progress display update via SSE or WebRTC
   function updateProgressDisplay(data) {
     document.getElementById('progress-percentage').textContent = `${data.percentage}%`;
     document.getElementById('progress-speed').textContent = data.speedFormatted;
@@ -921,6 +1385,11 @@
 
     const offset = 314 - (314 * data.percentage / 100);
     document.getElementById('progress-ring-fill').style.strokeDashoffset = offset;
+
+    const netLabel = document.getElementById('net-speed-label');
+    if (netLabel && data.speedFormatted && data.speedFormatted !== '-- MB/s') {
+      netLabel.textContent = data.speedFormatted;
+    }
   }
 
   // --- Zero-Click Automatic File Downloader ---
@@ -986,6 +1455,7 @@
 
     // Direct automatic download of all files - ZERO manual clicks needed!
     files.forEach((file, index) => {
+      if (file.directSaved) return; // Already saved directly to hard drive!
       setTimeout(() => {
         const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || file.fileName)}`;
         const name = file.name || file.fileName;
@@ -1013,6 +1483,681 @@
     } else {
       handleIncomingFilesComplete(comp);
     }
+  }
+
+  // ============================================================== //
+  // --- WORLDWIDE WEBRTC P2P ENGINE (METHOD 2: UNLIMITED DATA) --- //
+  // ============================================================== //
+
+  // Send signaling packet to remote peer via serverless room relay
+  async function sendWebRTCSignal(toId, signal, roomCode) {
+    try {
+      await fetch('/api/room/signal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          toId,
+          fromId: myInfo.id || myClientId,
+          signal,
+          roomCode: roomCode || currentRemoteRoomCode
+        })
+      });
+    } catch (err) {
+      console.error('[WebRTC] Signal dispatch failed:', err);
+    }
+  }
+
+  // Handle incoming signaling message (offer, answer, ICE candidate, join)
+  async function handleWebRTCSignal(data) {
+    const { fromId, signal, roomCode } = data;
+    if (!signal) return;
+
+    if (signal.type === 'room_peer_joined') {
+      handleRemotePeerJoined(signal.peer, signal.roomCode);
+      return;
+    }
+
+    let conn = webrtcConnections.get(fromId);
+    if (!conn) {
+      // If incoming offer and no connection object exists, instantiate as receiver/answerer
+      if (signal.type === 'offer') {
+        const peer = peersMap.get(fromId) || {
+          id: fromId,
+          name: signal.senderName || 'Worldwide Peer',
+          os: signal.senderOs || 'unknown',
+          isWebRTC: true,
+          isRemote: true,
+          roomCode: roomCode || currentRemoteRoomCode
+        };
+        conn = createWebRTCPeerConnection(fromId, peer, roomCode || currentRemoteRoomCode, false);
+      } else {
+        return;
+      }
+    }
+
+    const { pc } = conn;
+
+    try {
+      if (signal.type === 'offer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        // Flush any ICE candidates received before remote description was set
+        if (conn.pendingCandidates && conn.pendingCandidates.length > 0) {
+          for (const cand of conn.pendingCandidates) {
+            await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+          }
+          conn.pendingCandidates = [];
+        }
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendWebRTCSignal(fromId, { type: 'answer', sdp: answer }, roomCode || currentRemoteRoomCode);
+      } else if (signal.type === 'answer') {
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        if (conn.pendingCandidates && conn.pendingCandidates.length > 0) {
+          for (const cand of conn.pendingCandidates) {
+            await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+          }
+          conn.pendingCandidates = [];
+        }
+      } else if (signal.type === 'candidate' && signal.candidate) {
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        } else {
+          conn.pendingCandidates.push(signal.candidate);
+        }
+      }
+    } catch (err) {
+      console.error('[WebRTC] Signal handling error:', err);
+    }
+  }
+
+  // When a peer joins our room
+  function handleRemotePeerJoined(peer, roomCode) {
+    if (!peer || peer.id === (myInfo.id || myClientId)) return;
+
+    peer.isWebRTC = true;
+    peer.isRemote = true;
+    peer.roomCode = roomCode;
+    peersMap.set(peer.id, peer);
+    renderRadarPeers();
+
+    playChime('incoming');
+    triggerHaptic('medium');
+    showToast(`🌐 ${peer.name} connected via Worldwide Room #${roomCode}!`);
+
+    // Prepare connection as host (joiner will send the offer)
+    createWebRTCPeerConnection(peer.id, peer, roomCode, false);
+  }
+
+  // Create RTCPeerConnection instance
+  function createWebRTCPeerConnection(targetId, peer, roomCode, isInitiator) {
+    if (webrtcConnections.has(targetId)) {
+      const existing = webrtcConnections.get(targetId);
+      if (existing.pc && existing.pc.connectionState !== 'closed' && existing.pc.connectionState !== 'failed') {
+        return existing;
+      }
+    }
+
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+    const conn = {
+      pc,
+      dc: null,
+      peer,
+      roomCode,
+      pendingCandidates: [],
+      isInitiator
+    };
+    webrtcConnections.set(targetId, conn);
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendWebRTCSignal(targetId, { type: 'candidate', candidate: event.candidate }, roomCode);
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC] Peer ${peer.name} state:`, pc.connectionState);
+      if (pc.connectionState === 'connected') {
+        peer.isWebRTC = true;
+        peer.isRemote = true;
+        peersMap.set(targetId, peer);
+        renderRadarPeers();
+        showToast(`🔒 Direct P2P link connected to ${peer.name}!`);
+      } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+        if (peersMap.has(targetId) && peersMap.get(targetId).isWebRTC) {
+          peersMap.delete(targetId);
+          renderRadarPeers();
+        }
+        webrtcConnections.delete(targetId);
+      }
+    };
+
+    if (isInitiator) {
+      const dc = pc.createDataChannel('omnidrop-transfer', { ordered: true });
+      conn.dc = dc;
+      setupWebRTCDataChannel(dc, targetId, peer);
+
+      pc.createOffer().then(offer => {
+        return pc.setLocalDescription(offer).then(() => {
+          sendWebRTCSignal(targetId, {
+            type: 'offer',
+            sdp: offer,
+            senderName: myInfo.name,
+            senderOs: myInfo.os
+          }, roomCode);
+        });
+      }).catch(err => console.error('[WebRTC] Offer creation failed:', err));
+    } else {
+      pc.ondatachannel = (e) => {
+        conn.dc = e.channel;
+        setupWebRTCDataChannel(e.channel, targetId, peer);
+      };
+    }
+
+    return conn;
+  }
+
+  // Setup RTCDataChannel events and listeners
+  function setupWebRTCDataChannel(dc, targetId, peer) {
+    dc.binaryType = 'arraybuffer';
+
+    dc.onopen = () => {
+      console.log(`[WebRTC DataChannel OPEN] Connected with ${peer.name}`);
+      peer.isWebRTC = true;
+      peer.isRemote = true;
+      peersMap.set(targetId, peer);
+      renderRadarPeers();
+      playChime('incoming');
+    };
+
+    dc.onclose = () => {
+      console.log(`[WebRTC DataChannel CLOSED] with ${peer.name}`);
+      if (peersMap.has(targetId) && peersMap.get(targetId).isWebRTC) {
+        peersMap.delete(targetId);
+        renderRadarPeers();
+      }
+    };
+
+    dc.onerror = (err) => {
+      console.error('[WebRTC DataChannel Error]', err);
+    };
+
+    dc.onmessage = (event) => {
+      handleDataChannelMessage(event.data, targetId, peer, dc);
+    };
+  }
+
+  // Handle incoming data channel message (JSON control frames OR binary data chunks)
+  function handleDataChannelMessage(data, targetId, peer, dc) {
+    if (typeof data === 'string') {
+      try {
+        const msg = JSON.parse(data);
+        handleWebRTCControlMessage(msg, targetId, peer, dc);
+      } catch (err) {
+        console.error('[WebRTC] Failed to parse control message:', err);
+      }
+    } else if (data instanceof ArrayBuffer) {
+      handleWebRTCBinaryChunk(data);
+    }
+  }
+
+  // Handle WebRTC JSON control messages
+  function handleWebRTCControlMessage(msg, targetId, peer, dc) {
+    switch (msg.type) {
+      case 'TRANSFER_REQUEST':
+        // Receiver receives a file transfer prompt from remote peer
+        handleIncomingTransferPrompt({
+          transferId: msg.transferId,
+          sender: msg.sender || peer,
+          files: msg.files,
+          totalSize: msg.totalSize,
+          formattedSize: formatBytes(msg.totalSize),
+          isWebRTC: true,
+          dc: dc
+        });
+        break;
+
+      case 'TRANSFER_RESPONSE':
+        // Sender receives recipient's accept / decline response
+        if (msg.accepted) {
+          if (activeWebRTCOutgoing && activeWebRTCOutgoing.transferId === msg.transferId) {
+            streamFilesOverWebRTCDataChannel(activeWebRTCOutgoing);
+          }
+        } else {
+          document.getElementById('modal-progress').style.display = 'none';
+          showToast(`❌ ${peer.name} declined the worldwide transfer.`);
+          activeWebRTCOutgoing = null;
+        }
+        break;
+
+      case 'FILE_START':
+        // Receiver starts a new file inside the current transfer
+        if (currentWebRTCReceiving) {
+          currentWebRTCReceiving.currentFileIndex = msg.fileIndex;
+          currentWebRTCReceiving.currentFileName = msg.fileName;
+          currentWebRTCReceiving.currentFileSize = msg.fileSize;
+          currentWebRTCReceiving.currentFileType = msg.fileType || 'application/octet-stream';
+          currentWebRTCReceiving.receivedFileBytes = 0;
+          currentWebRTCReceiving.fileBlobParts = [];
+
+          document.getElementById('progress-title').textContent = 'Receiving Worldwide (P2P)...';
+          document.getElementById('progress-target').textContent = `From ${peer.name}`;
+          document.getElementById('progress-filename').textContent = `${msg.fileName} (${msg.fileIndex + 1}/${currentWebRTCReceiving.totalFiles})`;
+        }
+        break;
+
+      case 'FILE_END':
+        // Receiver finished receiving chunks for a single file
+        if (currentWebRTCReceiving) {
+          if (currentWebRTCReceiving.fileStream) {
+            currentWebRTCReceiving.fileStream.close().catch(() => {});
+            currentWebRTCReceiving.fileStream = null;
+            const savedItem = {
+              name: currentWebRTCReceiving.currentFileName,
+              size: currentWebRTCReceiving.currentFileSize,
+              directSaved: true
+            };
+            currentWebRTCReceiving.receivedBlobs.push(savedItem);
+            showToast(`✅ Saved ${currentWebRTCReceiving.currentFileName} directly to chosen folder!`);
+          } else {
+            const blob = new Blob(currentWebRTCReceiving.fileBlobParts, { type: currentWebRTCReceiving.currentFileType });
+            const blobUrl = URL.createObjectURL(blob);
+            const savedItem = {
+              name: currentWebRTCReceiving.currentFileName,
+              downloadUrl: blobUrl,
+              size: currentWebRTCReceiving.currentFileSize
+            };
+            currentWebRTCReceiving.receivedBlobs.push(savedItem);
+            currentWebRTCReceiving.fileBlobParts = [];
+
+            // Trigger automatic zero-click download immediately
+            triggerAutoDownload(blobUrl, currentWebRTCReceiving.currentFileName);
+          }
+        }
+        break;
+
+      case 'TRANSFER_COMPLETE':
+        // Entire transfer finished
+        releaseTransferWakeLock();
+        if (currentWebRTCReceiving) {
+          const finished = currentWebRTCReceiving;
+          currentWebRTCReceiving = null;
+          handleIncomingFilesComplete({
+            transferId: finished.transferId,
+            senderId: targetId,
+            totalFiles: finished.totalFiles,
+            savedFiles: finished.receivedBlobs
+          });
+        }
+        break;
+
+      case 'CLIPBOARD':
+        // Universal AirDrop Continuity over WebRTC
+        playChime('incoming');
+        triggerHaptic('medium');
+
+        const autoClip = document.getElementById('setting-auto-clipboard')?.checked ?? true;
+        if (autoClip && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(msg.text).catch(() => {});
+        }
+
+        saveSnippet({
+          text: msg.text,
+          isUrl: msg.isUrl,
+          sender: msg.sender || peer,
+          direction: 'received',
+          timestamp: msg.timestamp || Date.now()
+        });
+
+        const preview = msg.text.length > 55 ? msg.text.slice(0, 52) + '...' : msg.text;
+        showRichToast({
+          title: `🌐 AirDrop Continuity from ${peer.name}`,
+          preview: preview,
+          isUrl: msg.isUrl,
+          url: msg.isUrl ? msg.text : null,
+          onCopy: () => {
+            navigator.clipboard?.writeText(msg.text).catch(() => {});
+            triggerHaptic('light');
+          }
+        });
+        break;
+    }
+  }
+
+  // Handle WebRTC binary chunk on receiver side
+  function handleWebRTCBinaryChunk(chunk) {
+    if (!currentWebRTCReceiving) return;
+
+    if (currentWebRTCReceiving.fileStream) {
+      try {
+        currentWebRTCReceiving.fileStream.write(chunk);
+      } catch (e) {
+        currentWebRTCReceiving.fileBlobParts.push(chunk);
+      }
+    } else {
+      currentWebRTCReceiving.fileBlobParts.push(chunk);
+    }
+
+    currentWebRTCReceiving.receivedFileBytes += chunk.byteLength;
+    currentWebRTCReceiving.totalReceivedBytes += chunk.byteLength;
+
+    const now = Date.now();
+    if (!currentWebRTCReceiving.lastSampleTime) {
+      currentWebRTCReceiving.lastSampleTime = currentWebRTCReceiving.startTime || now;
+      currentWebRTCReceiving.lastSampleBytes = 0;
+    }
+
+    const sampleDeltaMs = now - currentWebRTCReceiving.lastSampleTime;
+    if (sampleDeltaMs >= 200 || currentWebRTCReceiving.receivedFileBytes >= currentWebRTCReceiving.currentFileSize) {
+      const bytesDelta = currentWebRTCReceiving.totalReceivedBytes - currentWebRTCReceiving.lastSampleBytes;
+      const instantSpeed = sampleDeltaMs > 0 ? (bytesDelta / sampleDeltaMs) * 1000 : 0;
+      const percentage = Math.min(100, Math.round((currentWebRTCReceiving.totalReceivedBytes / currentWebRTCReceiving.totalSize) * 100));
+
+      updateProgressDisplay({
+        percentage,
+        speedFormatted: formatTransferSpeed(instantSpeed),
+        fileName: `${currentWebRTCReceiving.currentFileName} (${currentWebRTCReceiving.currentFileIndex + 1}/${currentWebRTCReceiving.totalFiles})`,
+        fileBytes: currentWebRTCReceiving.receivedFileBytes,
+        fileTotal: currentWebRTCReceiving.currentFileSize
+      });
+
+      currentWebRTCReceiving.lastSampleTime = now;
+      currentWebRTCReceiving.lastSampleBytes = currentWebRTCReceiving.totalReceivedBytes;
+    }
+  }
+
+  // Sender starts transfer to WebRTC peer
+  function initiateWebRTCSendFiles(targetPeer, files, dc) {
+    let totalSize = 0;
+    const fileMetaList = files.map((f, idx) => {
+      totalSize += f.size;
+      return {
+        index: idx,
+        name: f.name,
+        size: f.size,
+        type: f.type || 'application/octet-stream'
+      };
+    });
+
+    const transferId = 'tf_p2p_' + Math.random().toString(36).substring(2, 10);
+    activeWebRTCOutgoing = {
+      transferId,
+      targetPeer,
+      files,
+      fileMetaList,
+      totalSize,
+      dc,
+      cancelRequested: false
+    };
+
+    const progressModal = document.getElementById('modal-progress');
+    document.getElementById('progress-title').textContent = 'Waiting for Recipient...';
+    document.getElementById('progress-target').textContent = `Waiting for ${targetPeer.name} to accept (Worldwide P2P)...`;
+    document.getElementById('progress-percentage').textContent = '⏳';
+    document.getElementById('progress-speed').textContent = 'Pending';
+    document.getElementById('progress-filename').textContent = `${files.length} file(s) (${formatBytes(totalSize)})`;
+    progressModal.style.display = 'flex';
+
+    // Send handshake request over DataChannel
+    dc.send(JSON.stringify({
+      type: 'TRANSFER_REQUEST',
+      transferId,
+      sender: { id: myInfo.id || myClientId, name: myInfo.name, os: myInfo.os },
+      files: fileMetaList,
+      totalSize
+    }));
+  }
+
+  // Stream files over WebRTC DataChannel with adaptive fiber chunk slicing and dynamic backpressure
+  async function streamFilesOverWebRTCDataChannel(outgoing) {
+    const { transferId, dc, targetPeer, files, fileMetaList, totalSize } = outgoing;
+    const progressModal = document.getElementById('modal-progress');
+    document.getElementById('progress-title').textContent = 'Streaming Worldwide (P2P)...';
+    document.getElementById('progress-target').textContent = `Direct WebRTC to ${targetPeer.name}`;
+
+    // Dynamic Fiber & Gigabit adaptive windowing (auto-detects fiber speed and scales throughput)
+    let currentChunkSize = 128 * 1024; // 128 KB base chunk size
+    let currentBufferThreshold = 8 * 1024 * 1024; // 8 MB base backpressure threshold
+    dc.bufferedAmountLowThreshold = currentBufferThreshold;
+
+    let grandBytesSent = 0;
+    const startTime = Date.now();
+    let lastSampleTime = startTime;
+    let lastSampleBytes = 0;
+
+    // Prevent device sleep and maintain active background streaming
+    acquireTransferWakeLock();
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        if (outgoing.cancelRequested) break;
+        const file = files[i];
+        const meta = fileMetaList[i];
+        const initialTotalChunks = Math.ceil(file.size / currentChunkSize);
+
+        // 1. Send FILE_START header
+        dc.send(JSON.stringify({
+          type: 'FILE_START',
+          transferId,
+          fileIndex: i,
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type || 'application/octet-stream',
+          totalChunks: initialTotalChunks
+        }));
+
+        // 2. High-speed pipelined chunk streaming (pre-fetches next chunk while sending)
+        let offset = 0;
+        let chunkIndex = 0;
+        let nextChunkPromise = file.slice(offset, offset + currentChunkSize).arrayBuffer();
+
+        while (offset < file.size) {
+          if (outgoing.cancelRequested) break;
+
+          // Backpressure flow control: pause if internal buffer exceeds threshold
+          if (dc.bufferedAmount > currentBufferThreshold) {
+            await new Promise(resolve => {
+              dc.onbufferedamountlow = () => {
+                dc.onbufferedamountlow = null;
+                resolve();
+              };
+            });
+          }
+
+          const buffer = await nextChunkPromise;
+          offset += buffer.byteLength;
+
+          // Asynchronously pre-fetch next chunk from disk while transmitting current buffer
+          if (offset < file.size) {
+            nextChunkPromise = file.slice(offset, offset + currentChunkSize).arrayBuffer();
+          }
+
+          dc.send(buffer);
+          grandBytesSent += buffer.byteLength;
+          chunkIndex++;
+
+          // Real-time speed measurement & dynamic fiber throughput adaptation
+          const now = Date.now();
+          const sampleDeltaMs = now - lastSampleTime;
+
+          if (sampleDeltaMs >= 200 || offset >= file.size) {
+            const bytesDelta = grandBytesSent - lastSampleBytes;
+            const instantSpeed = sampleDeltaMs > 0 ? (bytesDelta / sampleDeltaMs) * 1000 : 0;
+            const instantMbps = (instantSpeed * 8) / 1000000;
+
+            // Auto-detect fiber speed: dynamically boost chunk size & buffer window
+            if (instantMbps >= 300 && currentChunkSize < 512 * 1024) {
+              currentChunkSize = 512 * 1024; // 512 KB chunks for 300Mbps+ / Gigabit Fiber
+              currentBufferThreshold = 24 * 1024 * 1024; // 24 MB backpressure
+              dc.bufferedAmountLowThreshold = currentBufferThreshold;
+            } else if (instantMbps >= 120 && currentChunkSize < 256 * 1024) {
+              currentChunkSize = 256 * 1024; // 256 KB chunks for 100-300 Mbps Fiber
+              currentBufferThreshold = 16 * 1024 * 1024; // 16 MB backpressure
+              dc.bufferedAmountLowThreshold = currentBufferThreshold;
+            }
+
+            const percentage = Math.min(100, Math.round((grandBytesSent / totalSize) * 100));
+
+            updateProgressDisplay({
+              percentage,
+              speedFormatted: formatTransferSpeed(instantSpeed),
+              fileName: `${file.name} (${i + 1}/${files.length})`,
+              fileBytes: offset,
+              fileTotal: file.size
+            });
+
+            lastSampleTime = now;
+            lastSampleBytes = grandBytesSent;
+          }
+        }
+
+        // 3. Send FILE_END header
+        dc.send(JSON.stringify({
+          type: 'FILE_END',
+          transferId,
+          fileIndex: i
+        }));
+      }
+
+      // 4. Send TRANSFER_COMPLETE
+      dc.send(JSON.stringify({
+        type: 'TRANSFER_COMPLETE',
+        transferId
+      }));
+
+      playChime('success');
+      showToast(`🎉 Sent ${files.length} file(s) across WebRTC P2P!`);
+      setTimeout(() => {
+        progressModal.style.display = 'none';
+        activeWebRTCOutgoing = null;
+      }, 1200);
+
+    } catch (err) {
+      console.error('[WebRTC] File streaming error:', err);
+      showToast(`⚠️ WebRTC transfer failed: ${err.message}`);
+      progressModal.style.display = 'none';
+      activeWebRTCOutgoing = null;
+    } finally {
+      releaseTransferWakeLock();
+    }
+  }
+
+  // Create Worldwide WebRTC Room
+  async function createRemoteRoom() {
+    try {
+      const res = await fetch('/api/room/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          peer: {
+            id: myInfo.id || myClientId,
+            name: myInfo.name,
+            os: myInfo.os,
+            deviceType: myInfo.deviceType,
+            pin: myInfo.pin
+          }
+        })
+      });
+
+      const data = await res.json();
+      if (data.ok && data.roomCode) {
+        currentRemoteRoomCode = data.roomCode;
+        const shareUrl = `${window.location.origin}/?room=${data.roomCode}`;
+
+        const createdBox = document.getElementById('remote-created-box');
+        const codeDisplay = document.getElementById('remote-room-code-display');
+        const urlText = document.getElementById('remote-url-text');
+        const qrContainer = document.getElementById('qr-output-remote');
+
+        if (codeDisplay) codeDisplay.textContent = data.roomCode;
+        if (urlText) urlText.textContent = shareUrl;
+        if (createdBox) createdBox.style.display = 'block';
+
+        if (qrContainer && window.renderQRCodeSVG) {
+          qrContainer.innerHTML = window.renderQRCodeSVG(shareUrl, { size: 180 });
+        }
+
+        startRoomPolling();
+        showToast(`🌐 Worldwide Room #${data.roomCode} created! Share the link or PIN.`);
+        return data.roomCode;
+      }
+    } catch (err) {
+      showToast(`Failed to create remote room: ${err.message}`);
+    }
+  }
+
+  // Join Worldwide WebRTC Room
+  async function joinRemoteRoom(roomCode) {
+    const code = (roomCode || '').toString().trim().replace(/\D/g, '');
+    if (!code || code.length !== 6) {
+      showToast('Please enter a valid 6-digit room PIN');
+      return false;
+    }
+
+    try {
+      const res = await fetch('/api/room/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomCode: code,
+          peer: {
+            id: myInfo.id || myClientId,
+            name: myInfo.name,
+            os: myInfo.os,
+            deviceType: myInfo.deviceType,
+            pin: myInfo.pin
+          }
+        })
+      });
+
+      const data = await res.json();
+      if (data.ok) {
+        currentRemoteRoomCode = code;
+        startRoomPolling();
+
+        if (data.peers && Array.isArray(data.peers)) {
+          for (const peer of data.peers) {
+            if (peer.id !== (myInfo.id || myClientId)) {
+              peer.isWebRTC = true;
+              peer.isRemote = true;
+              peer.roomCode = code;
+              peersMap.set(peer.id, peer);
+              renderRadarPeers();
+              // As joiner, create offer to existing room peers
+              createWebRTCPeerConnection(peer.id, peer, code, true);
+            }
+          }
+        }
+
+        const qrModal = document.getElementById('modal-qr');
+        if (qrModal) qrModal.style.display = 'none';
+
+        showToast(`✨ Joined Worldwide Room #${code}! Connecting P2P...`);
+        return true;
+      } else {
+        return false;
+      }
+    } catch (err) {
+      console.warn('joinRemoteRoom error:', err);
+      return false;
+    }
+  }
+
+  // Polling fallback for serverless / Vercel platforms without persistent SSE
+  function startRoomPolling() {
+    if (roomPollingTimer) return;
+    roomPollingTimer = setInterval(async () => {
+      try {
+        const myId = myInfo.id || myClientId;
+        if (!myId) return;
+        const res = await fetch(`/api/room/signals?clientId=${encodeURIComponent(myId)}`);
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.signals) && data.signals.length > 0) {
+          for (const sig of data.signals) {
+            handleWebRTCSignal(sig);
+          }
+        }
+      } catch (e) {}
+    }, 1500);
   }
 
   // --- Universal Instant Modal Dismiss & Touch Handlers ---
@@ -1132,27 +2277,77 @@
     });
   }
 
-  // QR Modal Tabs (Same Wi-Fi vs Hotspot)
+  // QR Modal Tabs (Same Wi-Fi vs Hotspot vs Remote P2P)
   const tabWifi = document.getElementById('tab-qr-wifi');
   const tabHotspot = document.getElementById('tab-qr-hotspot');
+  const tabRemote = document.getElementById('tab-qr-remote');
   const bodyWifi = document.getElementById('qr-body-wifi');
   const bodyHotspot = document.getElementById('qr-body-hotspot');
+  const bodyRemote = document.getElementById('qr-body-remote');
 
-  if (tabWifi && tabHotspot) {
-    tabWifi.addEventListener('click', () => {
-      tabWifi.classList.add('active');
-      tabHotspot.classList.remove('active');
-      bodyWifi.style.display = 'block';
-      bodyHotspot.style.display = 'none';
-    });
+  function switchQRTab(activeTab) {
+    [tabWifi, tabHotspot, tabRemote].forEach(t => t?.classList.remove('active'));
+    [bodyWifi, bodyHotspot, bodyRemote].forEach(b => { if (b) b.style.display = 'none'; });
 
-    tabHotspot.addEventListener('click', () => {
-      tabHotspot.classList.add('active');
-      tabWifi.classList.remove('active');
-      bodyWifi.style.display = 'none';
-      bodyHotspot.style.display = 'block';
-    });
+    if (activeTab === 'wifi') {
+      tabWifi?.classList.add('active');
+      if (bodyWifi) bodyWifi.style.display = 'block';
+    } else if (activeTab === 'hotspot') {
+      tabHotspot?.classList.add('active');
+      if (bodyHotspot) bodyHotspot.style.display = 'block';
+    } else if (activeTab === 'remote') {
+      tabRemote?.classList.add('active');
+      if (bodyRemote) bodyRemote.style.display = 'block';
+      if (!currentRemoteRoomCode) {
+        createRemoteRoom();
+      }
+    }
   }
+
+  if (tabWifi) tabWifi.addEventListener('click', () => switchQRTab('wifi'));
+  if (tabHotspot) tabHotspot.addEventListener('click', () => switchQRTab('hotspot'));
+  if (tabRemote) tabRemote.addEventListener('click', () => switchQRTab('remote'));
+
+  // Remote WebRTC Tab Controls (Share Room Link & 6-Digit PIN)
+  document.getElementById('btn-create-remote-room')?.addEventListener('click', () => {
+    createRemoteRoom();
+  });
+
+  document.getElementById('btn-copy-remote-url')?.addEventListener('click', () => {
+    const urlText = document.getElementById('remote-url-text')?.textContent || '';
+    if (urlText && navigator.clipboard) {
+      navigator.clipboard.writeText(urlText).then(() => {
+        triggerHaptic('light');
+        showToast('📋 Remote share link copied to clipboard!');
+      }).catch(() => {});
+    }
+  });
+
+  document.getElementById('btn-share-remote-native')?.addEventListener('click', () => {
+    const url = document.getElementById('remote-url-text')?.textContent || window.location.href;
+    if (navigator.share) {
+      navigator.share({
+        title: 'Join my OmniDrop Room',
+        text: `Connect to my OmniDrop session to send/receive files worldwide:`,
+        url: url
+      }).catch(() => {});
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(url).then(() => {
+        showToast('Link copied! Share it via any messaging app.');
+      });
+    }
+  });
+
+  document.getElementById('btn-join-remote-code')?.addEventListener('click', async () => {
+    const input = document.getElementById('remote-join-code-input');
+    const code = input ? input.value.trim() : '';
+    if (code.length !== 6) {
+      showToast('Please type a 6-digit room code');
+      return;
+    }
+    const joined = await joinRemoteRoom(code);
+    if (joined && input) input.value = '';
+  });
 
   // Wi-Fi Hotspot QR Generator (Outdoor / No-Router Mode)
   const btnGenHotspot = document.getElementById('btn-gen-hotspot-qr');
@@ -1228,7 +2423,15 @@
         const id = el.dataset.id;
         const peer = peersMap.get(id);
         document.getElementById('modal-target-picker').style.display = 'none';
-        if (peer) triggerFilePickerForPeer(peer);
+        if (peer) {
+          if (pendingShareFiles && pendingShareFiles.length > 0) {
+            const files = pendingShareFiles;
+            pendingShareFiles = null;
+            initiateSendFiles(peer, files);
+          } else {
+            triggerFilePickerForPeer(peer);
+          }
+        }
       });
     });
 
@@ -1259,6 +2462,7 @@
     const cleanPin = (pin || '').toString().trim().replace(/\D/g, '');
     if (cleanPin.length !== 6) return false;
 
+    // First attempt: Local Wi-Fi / subnet pairing
     try {
       const res = await fetch('/api/pair-by-pin', {
         method: 'POST',
@@ -1282,14 +2486,21 @@
         playChime('incoming');
         showToast(`✨ Connected to ${data.peer.name}! Tap avatar to send.`);
         return true;
-      } else {
-        showToast(`❌ ${data.error || 'Device not found'}`);
-        return false;
       }
     } catch (err) {
-      showToast(`Connection failed: ${err.message}`);
-      return false;
+      console.warn('Local PIN pair attempt:', err);
     }
+
+    // Second attempt: Worldwide WebRTC Room (Method 2)
+    try {
+      const remoteJoined = await joinRemoteRoom(cleanPin);
+      if (remoteJoined) return true;
+    } catch (err) {
+      console.warn('Worldwide room PIN join attempt:', err);
+    }
+
+    showToast(`❌ Device or Worldwide Room PIN not found`);
+    return false;
   }
 
   // Fast Connect Bar on Radar Stage (Instant Auto-Connect upon typing 6 digits)
@@ -1366,44 +2577,449 @@
     });
   }
 
-  // Text Share Button
-  document.getElementById('btn-quick-text').addEventListener('click', () => {
-    const peerList = getActiveUniquePeers();
-    if (peerList.length === 0) {
-      showToast('No nearby devices found. Tap "Connect Phone" to scan QR code!');
+  // ==========================================================================
+  // AIRDROP CONTINUITY & TEXT MODE SUITE
+  // ==========================================================================
+  const SNIPPETS_STORAGE_KEY = 'omnidrop_snippets';
+
+  function getStoredSnippets() {
+    try {
+      const data = localStorage.getItem(SNIPPETS_STORAGE_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveSnippet({ text, isUrl, sender, direction = 'received', timestamp = Date.now() }) {
+    if (!text || !text.trim()) return null;
+    const snippets = getStoredSnippets();
+    const newSnippet = {
+      id: 'snip_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      text: text.trim(),
+      isUrl: isUrl ?? /^https?:\/\/[^\s]+$/i.test(text.trim()),
+      sender: sender || { name: 'Device' },
+      direction, // 'sent', 'received', or 'broadcast'
+      timestamp
+    };
+    snippets.unshift(newSnippet);
+    if (snippets.length > 50) snippets.pop();
+    try {
+      localStorage.setItem(SNIPPETS_STORAGE_KEY, JSON.stringify(snippets));
+    } catch (e) {}
+
+    updateSnippetsBadge();
+    renderSnippetsShelf();
+    return newSnippet;
+  }
+
+  function deleteSnippet(id) {
+    let snippets = getStoredSnippets();
+    snippets = snippets.filter(s => s.id !== id);
+    try {
+      localStorage.setItem(SNIPPETS_STORAGE_KEY, JSON.stringify(snippets));
+    } catch (e) {}
+    updateSnippetsBadge();
+    renderSnippetsShelf();
+  }
+
+  function clearAllSnippets() {
+    try {
+      localStorage.removeItem(SNIPPETS_STORAGE_KEY);
+    } catch (e) {}
+    updateSnippetsBadge();
+    renderSnippetsShelf();
+    showToast('Snippet history cleared.');
+  }
+
+  function updateSnippetsBadge() {
+    const badge = document.getElementById('snippets-tab-badge');
+    if (!badge) return;
+    const count = getStoredSnippets().length;
+    if (count > 0) {
+      badge.textContent = count;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  function formatTimeAgo(timestamp) {
+    const diff = Math.floor((Date.now() - timestamp) / 1000);
+    if (diff < 10) return 'Just now';
+    if (diff < 60) return `${diff}s ago`;
+    const mins = Math.floor(diff / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return new Date(timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+
+  function renderSnippetsShelf() {
+    const shelf = document.getElementById('snippets-shelf');
+    const emptyState = document.getElementById('snippets-empty-state');
+    const footer = document.getElementById('snippets-footer');
+    if (!shelf) return;
+
+    const snippets = getStoredSnippets();
+    if (snippets.length === 0) {
+      shelf.innerHTML = '';
+      if (emptyState) emptyState.style.display = 'block';
+      if (footer) footer.style.display = 'none';
       return;
     }
+
+    if (emptyState) emptyState.style.display = 'none';
+    if (footer) footer.style.display = 'flex';
+
+    shelf.innerHTML = snippets.map(s => {
+      let badgeClass = 'received';
+      let badgeLabel = `⬇ From ${escapeHtml(s.sender?.name || 'Device')}`;
+      if (s.direction === 'sent') {
+        badgeClass = 'sent';
+        badgeLabel = `⬆ Sent to ${escapeHtml(s.sender?.name || 'Device')}`;
+      } else if (s.direction === 'broadcast') {
+        badgeClass = 'broadcast';
+        badgeLabel = `⚡ Universal Broadcast`;
+      }
+
+      return `
+        <div class="snippet-card" data-id="${s.id}">
+          <div class="snippet-header">
+            <span class="snippet-badge ${badgeClass}">${badgeLabel}</span>
+            <span class="snippet-time">${formatTimeAgo(s.timestamp)}</span>
+          </div>
+          <div class="snippet-content">${escapeHtml(s.text)}</div>
+          <div class="snippet-actions">
+            ${s.isUrl ? `<a href="${escapeHtml(s.text)}" target="_blank" rel="noopener noreferrer" class="snippet-btn snippet-btn-link">🔗 Open Link</a>` : ''}
+            <button type="button" class="snippet-btn btn-snippet-copy" data-text="${escapeHtml(s.text)}">📋 Copy</button>
+            <button type="button" class="snippet-btn btn-snippet-resend" data-text="${escapeHtml(s.text)}">⚡ Re-Send</button>
+            <button type="button" class="snippet-btn snippet-btn-danger btn-snippet-del" data-id="${s.id}" title="Delete">✕</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    shelf.querySelectorAll('.btn-snippet-copy').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const text = btn.getAttribute('data-text');
+        if (text) {
+          navigator.clipboard?.writeText(text).catch(() => {});
+          btn.textContent = 'Copied! ✓';
+          triggerHaptic('light');
+          setTimeout(() => { if (btn) btn.textContent = '📋 Copy'; }, 1500);
+        }
+      });
+    });
+
+    shelf.querySelectorAll('.btn-snippet-resend').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const text = btn.getAttribute('data-text');
+        if (text) {
+          openTextModal(text);
+        }
+      });
+    });
+
+    shelf.querySelectorAll('.btn-snippet-del').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        if (id) deleteSnippet(id);
+      });
+    });
+  }
+
+  function openTextModal(initialText = '') {
+    const modal = document.getElementById('modal-text');
+    if (!modal) return;
+
+    switchTextTab('compose');
+
+    const input = document.getElementById('text-share-input');
+    if (initialText) {
+      input.value = initialText;
+    }
+    updateTextCounterAndUrl();
+    populateTextRecipients();
+
+    modal.style.display = 'flex';
+    input.focus();
+  }
+
+  function switchTextTab(tab) {
+    const tabCompose = document.getElementById('tab-text-compose');
+    const tabSnippets = document.getElementById('tab-text-snippets');
+    const viewCompose = document.getElementById('view-text-compose');
+    const viewSnippets = document.getElementById('view-text-snippets');
+
+    if (tab === 'compose') {
+      tabCompose?.classList.add('active');
+      tabSnippets?.classList.remove('active');
+      if (viewCompose) viewCompose.style.display = 'block';
+      if (viewSnippets) viewSnippets.style.display = 'none';
+    } else {
+      tabSnippets?.classList.add('active');
+      tabCompose?.classList.remove('active');
+      if (viewCompose) viewCompose.style.display = 'none';
+      if (viewSnippets) viewSnippets.style.display = 'block';
+      renderSnippetsShelf();
+    }
+  }
+
+  function updateTextCounterAndUrl() {
+    const input = document.getElementById('text-share-input');
+    const counterDisplay = document.getElementById('text-counter-display');
+    const urlBadge = document.getElementById('text-url-indicator');
+    if (!input) return;
+
+    const val = input.value;
+    const trimmed = val.trim();
+    const chars = val.length;
+    const words = trimmed ? trimmed.split(/\s+/).length : 0;
+
+    if (counterDisplay) {
+      counterDisplay.textContent = `${words} word${words !== 1 ? 's' : ''} · ${chars} char${chars !== 1 ? 's' : ''}`;
+    }
+
+    const isUrl = /^https?:\/\/[^\s]+$/i.test(trimmed);
+    if (urlBadge) {
+      urlBadge.style.display = isUrl ? 'inline-flex' : 'none';
+    }
+  }
+
+  function populateTextRecipients() {
     const select = document.getElementById('text-target-select');
-    select.innerHTML = peerList.map(p => `<option value="${p.id}">${p.name} (${p.ip})</option>`).join('');
-    document.getElementById('text-share-input').value = '';
-    document.getElementById('modal-text').style.display = 'flex';
+    if (!select) return;
+    const peerList = getActiveUniquePeers();
+
+    let options = `<option value="all">⚡ Broadcast to All Nearby Devices</option>`;
+    if (peerList.length > 0) {
+      options += peerList.map(p => `
+        <option value="${p.id}">${p.name} (${p.ip || (p.pin ? 'PIN ' + p.pin : 'Nearby')})</option>
+      `).join('');
+    }
+    select.innerHTML = options;
+  }
+
+  async function beamClipboard(text, targetId = 'all') {
+    if (!text || !text.trim()) {
+      showToast('Clipboard is empty! Copy text or a link first.');
+      return;
+    }
+    const trimmed = text.trim();
+    const isUrl = /^https?:\/\/[^\s]+$/i.test(trimmed);
+
+    try {
+      const resp = await fetch('/api/clipboard/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: trimmed,
+          targetId: targetId,
+          broadcast: targetId === 'all'
+        })
+      });
+
+      const resData = await resp.json();
+      if (!resp.ok) throw new Error(resData.error || 'Server error');
+
+      // Also broadcast over open WebRTC DataChannels for worldwide room peers
+      for (const [peerId, conn] of webrtcConnections.entries()) {
+        if (targetId === 'all' || targetId === peerId) {
+          if (conn.dc && conn.dc.readyState === 'open') {
+            try {
+              conn.dc.send(JSON.stringify({
+                type: 'CLIPBOARD',
+                text: trimmed,
+                isUrl,
+                sender: { id: myInfo.id || myClientId, name: myInfo.name },
+                timestamp: Date.now()
+              }));
+            } catch (e) {}
+          }
+        }
+      }
+
+      playChime('success');
+      triggerHaptic('light');
+
+      let targetName = 'All Nearby Devices';
+      if (targetId !== 'all') {
+        const peer = peersMap.get(targetId);
+        targetName = peer ? peer.name : 'Device';
+      }
+
+      saveSnippet({
+        text: trimmed,
+        isUrl,
+        sender: { name: targetName },
+        direction: targetId === 'all' ? 'broadcast' : 'sent',
+        timestamp: Date.now()
+      });
+
+      const preview = trimmed.slice(0, 35) + (trimmed.length > 35 ? '...' : '');
+      showToast(`⚡ Beamed to ${targetName}: "${preview}"`);
+    } catch (err) {
+      showToast(`Failed to beam clipboard: ${err.message}`);
+    }
+  }
+
+  // --- Wire Text & AirDrop Continuity Event Listeners ---
+  document.getElementById('btn-quick-text')?.addEventListener('click', () => {
+    openTextModal();
   });
 
-  document.getElementById('btn-close-text').addEventListener('click', () => {
+  document.getElementById('btn-beam-clipboard')?.addEventListener('click', async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim()) {
+          beamClipboard(text, 'all');
+          return;
+        }
+      }
+      openTextModal();
+      showToast('Paste text or link into the composer to beam!');
+    } catch (e) {
+      openTextModal();
+    }
+  });
+
+  document.getElementById('btn-close-text')?.addEventListener('click', () => {
     document.getElementById('modal-text').style.display = 'none';
   });
 
-  document.getElementById('btn-send-text-action').addEventListener('click', async () => {
-    const text = document.getElementById('text-share-input').value.trim();
-    const targetId = document.getElementById('text-target-select').value;
-    const targetPeer = peersMap.get(targetId);
+  document.getElementById('tab-text-compose')?.addEventListener('click', () => {
+    switchTextTab('compose');
+  });
 
-    if (!text || !targetPeer) return;
+  document.getElementById('tab-text-snippets')?.addEventListener('click', () => {
+    switchTextTab('snippets');
+  });
+
+  const textInput = document.getElementById('text-share-input');
+  if (textInput) {
+    textInput.addEventListener('input', updateTextCounterAndUrl);
+    textInput.addEventListener('paste', () => setTimeout(updateTextCounterAndUrl, 50));
+  }
+
+  document.getElementById('btn-paste-clipboard')?.addEventListener('click', async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          textInput.value = text;
+          updateTextCounterAndUrl();
+          triggerHaptic('light');
+          showToast('📋 Pasted from clipboard!');
+          return;
+        }
+      }
+      showToast('Clipboard is empty.');
+    } catch (err) {
+      showToast('Clipboard read access was blocked. Paste directly with Ctrl+V / Cmd+V.');
+    }
+  });
+
+  document.getElementById('btn-beam-now')?.addEventListener('click', async () => {
+    let text = textInput ? textInput.value.trim() : '';
+    if (!text && navigator.clipboard && navigator.clipboard.readText) {
+      try { text = (await navigator.clipboard.readText()) || ''; } catch (e) {}
+    }
+    if (!text) {
+      showToast('No text or clipboard content to beam!');
+      return;
+    }
+    const targetId = document.getElementById('text-target-select')?.value || 'all';
+    await beamClipboard(text, targetId);
+    document.getElementById('modal-text').style.display = 'none';
+  });
+
+  document.getElementById('btn-clear-text')?.addEventListener('click', () => {
+    if (textInput) {
+      textInput.value = '';
+      updateTextCounterAndUrl();
+      textInput.focus();
+    }
+  });
+
+  document.getElementById('btn-clear-all-snippets')?.addEventListener('click', () => {
+    clearAllSnippets();
+  });
+
+  document.getElementById('btn-send-text-action')?.addEventListener('click', async () => {
+    const text = textInput ? textInput.value.trim() : '';
+    const targetId = document.getElementById('text-target-select')?.value || 'all';
+
+    if (!text) {
+      showToast('Please enter text or link to beam!');
+      return;
+    }
+
+    if (targetId === 'all') {
+      await beamClipboard(text, 'all');
+      document.getElementById('modal-text').style.display = 'none';
+      return;
+    }
+
+    const targetPeer = peersMap.get(targetId);
+    if (!targetPeer) {
+      await beamClipboard(text, targetId);
+      document.getElementById('modal-text').style.display = 'none';
+      return;
+    }
+
+    // Direct WebRTC P2P DataChannel transmission if remote peer
+    if (targetPeer.isWebRTC || webrtcConnections.has(targetPeer.id)) {
+      const conn = webrtcConnections.get(targetPeer.id);
+      if (conn && conn.dc && conn.dc.readyState === 'open') {
+        const isUrl = /^https?:\/\/[^\s]+$/i.test(text);
+        conn.dc.send(JSON.stringify({
+          type: 'CLIPBOARD',
+          text,
+          isUrl,
+          sender: { id: myInfo.id || myClientId, name: myInfo.name },
+          timestamp: Date.now()
+        }));
+        document.getElementById('modal-text').style.display = 'none';
+        playChime('success');
+        triggerHaptic('light');
+        saveSnippet({
+          text,
+          isUrl,
+          sender: { name: targetPeer.name },
+          direction: 'sent',
+          timestamp: Date.now()
+        });
+        showToast(`⚡ Beamed worldwide to ${targetPeer.name}!`);
+        return;
+      }
+    }
 
     try {
+      const isUrl = /^https?:\/\/[^\s]+$/i.test(text);
       await fetch('/api/send/text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           targetIp: targetPeer.ip,
           targetPort: targetPeer.port,
+          targetId: targetPeer.id,
           text: text
         })
       });
 
       document.getElementById('modal-text').style.display = 'none';
       playChime('success');
-      showToast(`Sent text to ${targetPeer.name}!`);
+      triggerHaptic('light');
+      saveSnippet({
+        text,
+        isUrl,
+        sender: { name: targetPeer.name },
+        direction: 'sent',
+        timestamp: Date.now()
+      });
+      showToast(`⚡ Beamed to ${targetPeer.name}!`);
     } catch (e) {
       showToast(`Failed to send text: ${e.message}`);
     }
@@ -1446,6 +3062,12 @@
     });
 
     if (toggleAutoDownload) toggleAutoDownload.checked = settings.autoDownload;
+
+    // Populate Supabase Settings
+    const inputSupabaseKey = document.getElementById('setting-supabase-anon-key');
+    if (inputSupabaseKey && window.OmniDropSupabase) {
+      inputSupabaseKey.value = window.OmniDropSupabase.getConfig().anonKey || '';
+    }
 
     modalSettings.style.display = 'flex';
   }
@@ -1559,6 +3181,19 @@
     });
   }
 
+  // Save Supabase Anon Key
+  const inputSupabaseKey = document.getElementById('setting-supabase-anon-key');
+  const btnSaveSupabaseKey = document.getElementById('btn-save-supabase-key');
+  if (btnSaveSupabaseKey && inputSupabaseKey) {
+    btnSaveSupabaseKey.addEventListener('click', () => {
+      const key = inputSupabaseKey.value.trim();
+      if (window.OmniDropSupabase) {
+        window.OmniDropSupabase.saveConfig('eqsjbadswzvfkrkdnnra', key);
+        showToast('✅ Supabase project eqsjbadswzvfkrkdnnra connected!');
+      }
+    });
+  }
+
   // Global Drag and Drop onto Radar
   const dropzone = document.getElementById('radar-dropzone');
   window.addEventListener('dragover', e => e.preventDefault());
@@ -1590,10 +3225,33 @@
 
   // Register PWA Service Worker if available
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.register('/sw.js').then(reg => {
+      // Check for updates periodically
+      reg.update().catch(() => {});
+    }).catch(() => {});
+
+    navigator.serviceWorker.addEventListener('message', event => {
+      if (event.data && event.data.type === 'SHARED_CONTENT') {
+        checkPendingShareTarget();
+      }
+    });
   }
 
   // Boot
   initSelf();
+  updateSnippetsBadge();
+  checkPendingShareTarget();
+  detectNetworkCapabilities();
+
+  // Auto-join Worldwide WebRTC Room if ?room=XXXXXX is present in URL
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get('room');
+    if (roomParam && roomParam.trim().length === 6) {
+      setTimeout(() => {
+        joinRemoteRoom(roomParam.trim());
+      }, 900);
+    }
+  } catch (e) {}
 })();
 

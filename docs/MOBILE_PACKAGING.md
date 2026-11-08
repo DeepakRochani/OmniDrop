@@ -25,6 +25,8 @@ Using **Capacitor**:
 ```bash
 # In the project directory:
 npm install @capacitor/core @capacitor/cli @capacitor/android
+# Install Native Screen Wake Lock plugin (prevents phone sleep during file transfers)
+npm install @capacitor-community/keep-awake
 
 # Initialize Capacitor
 npx cap init OmniDrop com.omnidrop.app --web-dir public
@@ -39,7 +41,11 @@ npx cap copy
 npx cap open android
 ```
 
-### In Android Studio:
+### In Android Studio (`android/app/src/main/AndroidManifest.xml`):
+Ensure the `WAKE_LOCK` permission is included inside `<manifest>`:
+```xml
+<uses-permission android:name="android.permission.WAKE_LOCK" />
+```
 1. Click **Build > Generate Signed Bundle / APK**.
 2. Select **APK** (for direct device install) or **Android App Bundle (AAB)** (for Google Play Store).
 3. Transfer the `.apk` file to any Android device or publish to Google Play.
@@ -76,13 +82,17 @@ npx cap open ios
 
 ## 4. Packaging for Windows & macOS Desktop (Electron or Tauri)
 
-### Using Electron:
+### Using Electron (with Native Screen Wake Lock):
+OmniDrop's desktop runtime (`desktop.js` and `preload.js`) includes Electron's native `powerSaveBlocker`:
+* Automatically blocks OS display and system suspension while files are sending or receiving.
+* Releases the block as soon as the transfer finishes or is cancelled.
+
 ```bash
 # Install electron and packager
 npm install --save-dev electron electron-builder
 
 # Run locally in desktop window
-npx electron .
+npm run desktop
 ```
 
 ### Add to `package.json`:

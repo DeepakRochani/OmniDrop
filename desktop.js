@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, Notification, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, Notification, ipcMain, powerSaveBlocker } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
@@ -6,8 +6,27 @@ const http = require('http');
 let mainWindow = null;
 let tray = null;
 let serverProcess = null;
+let wakeLockBlockerId = null;
 const PORT = process.env.PORT || 53317;
 const APP_URL = `http://localhost:${PORT}`;
+
+// Native OS-Level Screen Wake Lock (prevents display sleep during active file transfers)
+ipcMain.handle('acquire-wake-lock', () => {
+  if (wakeLockBlockerId === null || !powerSaveBlocker.isStarted(wakeLockBlockerId)) {
+    wakeLockBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+    console.log('[Desktop] Native Screen Wake Lock acquired (ID:', wakeLockBlockerId, ')');
+  }
+  return { ok: true, id: wakeLockBlockerId };
+});
+
+ipcMain.handle('release-wake-lock', () => {
+  if (wakeLockBlockerId !== null && powerSaveBlocker.isStarted(wakeLockBlockerId)) {
+    powerSaveBlocker.stop(wakeLockBlockerId);
+    console.log('[Desktop] Native Screen Wake Lock released (ID:', wakeLockBlockerId, ')');
+    wakeLockBlockerId = null;
+  }
+  return { ok: true };
+});
 
 // 1. Start embedded OmniDrop background server
 function startServer() {
@@ -60,7 +79,8 @@ function createMainWindow() {
     show: false,
     webPreferences: {
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
     }
   });
 
@@ -174,3 +194,4 @@ app.on('will-quit', () => {
     serverProcess.kill();
   }
 });
+
