@@ -102,9 +102,9 @@ module.exports = async (req, res) => {
   }
 
   // 2. Health check / Info
-  if (pathname === '/api' || pathname === '/api/health') {
+  if (pathname === '/api' || pathname === '/api/health' || pathname.endsWith('/health') || pathname.endsWith('/api')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, service: 'OmniDrop WebRTC Signaling Serverless' }));
+    res.end(JSON.stringify({ ok: true, service: 'OmniDrop WebRTC Signaling Serverless', path: pathname }));
     return;
   }
 
