@@ -6,3 +6,4 @@ module.exports = {
   supabaseUrl: 'https://eqsjbadswzvfkrkdnnra.supabase.co',
   anonKey: process.env.SUPABASE_ANON_KEY || ''
 };
+

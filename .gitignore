@@ -4,4 +4,5 @@ downloads/
 .device_id
 .env
 .env.local
+.vercel
 

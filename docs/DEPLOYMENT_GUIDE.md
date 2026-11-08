@@ -50,52 +50,41 @@ This guide explains how **Method 2: WebRTC P2P (Peer-to-Peer DataChannels)** pow
 
 ## 🚀 2. Deploying to Vercel (Step-by-Step)
 
-OmniDrop is already pre-configured for Vercel with `vercel.json` and `api/index.js`!
+OmniDrop is configured for your Vercel Project **`prj_AbJPiH9W7lYQdLyAcinXzmhTqkF2`** with `vercel.json` and `api/index.js`!
 
-### Method A: Deploy via GitHub (Recommended)
-1. Push your code to your GitHub repository (see Section 3 below).
-2. Go to [vercel.com](https://vercel.com) and log in.
-3. Click **"Add New..."** -> **"Project"**.
-4. Select your `omnidrop` repository from GitHub.
-5. In the configuration screen:
-   - **Framework Preset**: Other (or Node.js)
-   - **Root Directory**: `./` (leave default)
+### Method A: Connect Vercel Project with GitHub (Zero-Touch CI/CD)
+Since your repository is live at **[https://github.com/DeepakRochani/OmniDrop.git](https://github.com/DeepakRochani/OmniDrop.git)**:
+1. Open your Vercel Dashboard at [vercel.com](https://vercel.com).
+2. Go to your project **`prj_AbJPiH9W7lYQdLyAcinXzmhTqkF2`** (or click **Add New...** -> **Project**).
+3. Under **Settings** -> **Git**, link repository `DeepakRochani/OmniDrop`.
+4. Vercel automatically deploys every time code is pushed to `main` branch!
+5. Build settings:
+   - **Framework Preset**: Other
+   - **Root Directory**: `./`
    - **Build Command**: None (leave empty)
    - **Output Directory**: None (served via `vercel.json`)
-6. Click **"Deploy"**.
-7. In ~30 seconds, Vercel gives you a live global HTTPS URL: `https://your-app.vercel.app`!
 
 ### Method B: Deploy via Vercel CLI
+Local project configuration is linked in `.vercel/project.json`:
 ```bash
-npm install -g vercel
-vercel login
+# Link project locally
+vercel link --project prj_AbJPiH9W7lYQdLyAcinXzmhTqkF2
+
+# Deploy directly to production
 vercel --prod
 ```
 
 ---
 
-## 🐙 3. Pushing Code to GitHub
+## 🐙 3. GitHub Repository Details
 
-To store your project securely on GitHub:
+Repository: **[https://github.com/DeepakRochani/OmniDrop.git](https://github.com/DeepakRochani/OmniDrop.git)**
 
 ```bash
-# 1. Initialize git if not already done
-git init
-
-# 2. Add all project files
+# Push updates at any time:
 git add .
-
-# 3. Commit changes
-git commit -m "feat: Add WebRTC P2P worldwide file transfer and Vercel serverless signaling"
-
-# 4. Set branch to main
-git branch -M main
-
-# 5. Link to your GitHub repository (replace with your repo URL)
-git remote add origin https://github.com/YOUR_USERNAME/omnidrop.git
-
-# 6. Push code to GitHub
-git push -u origin main
+git commit -m "update message"
+git push origin main
 ```
 
 ---
