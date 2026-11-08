@@ -840,9 +840,14 @@
 
       let hasChanges = false;
 
-      // Remove any peers that left or are no longer active (preserves WebRTC remote peers)
+      // Remove any peers that left or are no longer active (preserves actively open WebRTC peers)
       for (const [id, peer] of peersMap.entries()) {
-        if (peer && (peer.isRemote || peer.isWebRTC)) continue;
+        if (peer && peer.isWebRTC) {
+          const conn = webrtcConnections.get(id);
+          if (conn && conn.dc && conn.dc.readyState === 'open') {
+            continue; // Keep actively connected WebRTC peer
+          }
+        }
         if (!currentIds.has(id)) {
           peersMap.delete(id);
           hasChanges = true;
@@ -850,7 +855,7 @@
       }
 
       for (const peer of list) {
-        if (peer.id !== (myInfo.id || myClientId)) {
+        if (peer.id !== (myInfo.id || myClientId) && !peer.id.startsWith('omni_') && peer.id !== 'cloud_node') {
           const old = peersMap.get(peer.id);
           if (!old || old.name !== peer.name || old.ip !== peer.ip || old.pin !== peer.pin) {
             hasChanges = true;

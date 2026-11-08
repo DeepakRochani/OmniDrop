@@ -120,9 +120,13 @@ module.exports = async (req, res) => {
       pin = Math.floor(100000 + Math.random() * 900000).toString();
     } while (rooms.has(pin));
 
-    const cloudPeer = {
-      id: 'omni_' + Math.random().toString(36).substring(2, 10),
-      name: 'OmniDrop Cloud Node',
+    // Initialize an empty room for this PIN (no mock or cloud nodes placed into peers)
+    rooms.set(pin, { code: pin, peers: new Map(), createdAt: Date.now() });
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'cloud_node',
+      name: 'OmniDrop Cloud Relay',
       deviceType: 'cloud',
       os: 'web',
       ip: clientIp,
@@ -132,14 +136,7 @@ module.exports = async (req, res) => {
       isCloud: true,
       downloadsDir: 'Downloads',
       protocol: 'omni-v1'
-    };
-
-    const roomPeers = new Map();
-    roomPeers.set(cloudPeer.id, cloudPeer);
-    rooms.set(pin, { code: pin, peers: roomPeers, createdAt: Date.now() });
-
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(cloudPeer));
+    }));
     return;
   }
 
@@ -224,18 +221,45 @@ module.exports = async (req, res) => {
 
   // 5. Get Discovered Peers (GET /api/peers)
   if (req.method === 'GET' && (routeParam === 'peers' || fullPath.includes('api/peers') || fullPath.includes('/api/peers'))) {
-    const allPeers = [];
+    const parsedQuery = new URL(req.url, 'http://localhost');
+    const clientId = parsedQuery.searchParams.get('clientId') || url.searchParams.get('clientId') || '';
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1').split(',')[0].trim();
+    const now = Date.now();
+    const activeCutoff = now - 35000; // Active within last 35 seconds
+
+    const relevantPeers = [];
     const seen = new Set();
-    for (const room of rooms.values()) {
-      for (const p of room.peers.values()) {
-        if (!seen.has(p.id)) {
-          seen.add(p.id);
-          allPeers.push(p);
+
+    // Find any room that this client has joined or created
+    const clientRoomCodes = new Set();
+    for (const [code, room] of rooms.entries()) {
+      if (room.peers.has(clientId)) {
+        clientRoomCodes.add(code);
+      }
+    }
+
+    for (const [code, room] of rooms.entries()) {
+      const isClientRoom = clientRoomCodes.has(code);
+      for (const [pid, p] of room.peers.entries()) {
+        if (pid === clientId) continue;
+        if (seen.has(pid)) continue;
+        if (p.id && (p.id.startsWith('omni_') || p.id === 'cloud_node')) continue; // Ignore cloud server nodes
+
+        // Only include if:
+        // 1. Peer is in the SAME room (explicit pairing)
+        // 2. OR peer is on the same local Wi-Fi / IP AND was active recently
+        const isSameWifi = p.ip && p.ip === clientIp && clientIp !== '127.0.0.1';
+        const isRecentlyActive = (p.lastSeen || p.createdAt || 0) > activeCutoff;
+
+        if (isClientRoom || (isSameWifi && isRecentlyActive)) {
+          seen.add(pid);
+          relevantPeers.push(p);
         }
       }
     }
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(allPeers));
+    res.end(JSON.stringify(relevantPeers));
     return;
   }
 
