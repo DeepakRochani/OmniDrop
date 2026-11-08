@@ -23,6 +23,64 @@ const MIME_TYPES = {
   '.ogg': 'audio/ogg'
 };
 
+// Helper: reliably obtain client public IP
+function getClientIp(req) {
+  const xForwarded = req.headers['x-forwarded-for'];
+  if (xForwarded) {
+    const first = xForwarded.split(',')[0].trim();
+    if (first) return first;
+  }
+  if (req.headers['x-real-ip']) {
+    return req.headers['x-real-ip'].trim();
+  }
+  return req.socket?.remoteAddress || '127.0.0.1';
+}
+
+// IP comparison helper for IPv4 and IPv6 subnets
+function isIpMatch(ip1, ip2) {
+  if (!ip1 || !ip2) return false;
+  if (ip1 === ip2) return true;
+
+  const c1 = ip1.replace(/^::ffff:/, '').trim();
+  const c2 = ip2.replace(/^::ffff:/, '').trim();
+  if (c1 === c2) return true;
+
+  // IPv6 subnet comparison (/64 network prefix: first 4 hex blocks)
+  if (c1.includes(':') && c2.includes(':')) {
+    const p1 = c1.split(':').slice(0, 4).join(':');
+    const p2 = c2.split(':').slice(0, 4).join(':');
+    if (p1 && p1 === p2) return true;
+  }
+
+  // IPv4 /24 subnet comparison (first 3 octets: e.g. 192.168.1.x or public ISP subnet)
+  if (c1.includes('.') && c2.includes('.')) {
+    const p1 = c1.split('.').slice(0, 3).join('.');
+    const p2 = c2.split('.').slice(0, 3).join('.');
+    if (p1 && p1 === p2) return true;
+  }
+
+  return false;
+}
+
+// Determine if two peers share the same local Wi-Fi / LAN network
+function arePeersInSameNetwork(p1, p2, clientIp) {
+  if (!p1 || !p2) return false;
+
+  // 1. Direct Public IP / Subnet Match
+  const ip1 = p1.ip || clientIp;
+  const ip2 = p2.ip;
+  if (ip1 && ip2 && ip1 !== '127.0.0.1' && isIpMatch(ip1, ip2)) {
+    return true;
+  }
+
+  // 2. Local LAN IP Match (e.g. both reporting 192.168.1.x)
+  if (p1.localLanIp && p2.localLanIp && isIpMatch(p1.localLanIp, p2.localLanIp)) {
+    return true;
+  }
+
+  return false;
+}
+
 // Clean up rooms older than 2 hours
 function cleanupExpired() {
   const cutoff = Date.now() - 2 * 60 * 60 * 1000;
@@ -92,6 +150,7 @@ module.exports = async (req, res) => {
 
   cleanupExpired();
 
+  const clientIp = getClientIp(req);
   const rawPath = req.headers['x-matched-path'] || req.headers['x-vercel-matched-path'] || req.headers['x-forwarded-uri'] || req.url;
   const url = new URL(rawPath, `http://${req.headers.host || 'localhost'}`);
   const slugPath = req.query && req.query.slug ? '/' + [].concat(req.query.slug).join('/') : '';
@@ -107,20 +166,19 @@ module.exports = async (req, res) => {
       service: 'OmniDrop WebRTC Signaling Serverless',
       routeParam,
       fullPath,
-      reqUrl: req.url
+      clientIp
     }));
     return;
   }
 
   // 2. Get Me / Device Info API (GET /api/me)
   if (req.method === 'GET' && (routeParam === 'me' || routeParam === 'api/me' || fullPath.includes('api/me') || fullPath.includes('/api/me'))) {
-    const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1').split(',')[0].trim();
     let pin;
     do {
       pin = Math.floor(100000 + Math.random() * 900000).toString();
     } while (rooms.has(pin));
 
-    // Initialize an empty room for this PIN (no mock or cloud nodes placed into peers)
+    // Initialize an empty room for this PIN
     rooms.set(pin, { code: pin, peers: new Map(), createdAt: Date.now() });
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -143,7 +201,6 @@ module.exports = async (req, res) => {
   // 3. Register Web Client API (POST /api/register-web-client)
   if (req.method === 'POST' && (routeParam === 'register-web-client' || fullPath.includes('register-web-client'))) {
     const data = await parseJsonBody(req).catch(() => ({}));
-    const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1').split(',')[0].trim();
     const clientId = data.id || ('web_' + Math.random().toString(36).substring(2, 10));
     let clientPin = (data.pin || '').toString().trim().replace(/\D/g, '');
     if (!clientPin || clientPin.length !== 6) {
@@ -158,6 +215,7 @@ module.exports = async (req, res) => {
       deviceType: data.deviceType || 'phone',
       os: data.os || 'browser',
       ip: clientIp,
+      localLanIp: data.localLanIp || undefined,
       port: 443,
       lastSeen: Date.now(),
       isWeb: true,
@@ -192,27 +250,31 @@ module.exports = async (req, res) => {
     }
 
     if (sender.id) {
-      room.peers.set(sender.id, {
+      const senderPeer = {
         id: sender.id,
         name: sender.name || 'OmniDrop Peer',
         os: sender.os || 'unknown',
         deviceType: sender.deviceType || 'phone',
         isWebRTC: true,
         isRemote: true,
-        pin: sender.pin || cleanPin
-      });
+        pin: sender.pin || cleanPin,
+        ip: clientIp,
+        localLanIp: sender.localLanIp || undefined,
+        lastSeen: Date.now()
+      };
+      room.peers.set(sender.id, senderPeer);
 
       for (const [pid] of room.peers.entries()) {
         if (pid !== sender.id) {
           const queue = roomSignals.get(pid) || [];
-          queue.push({ fromId: sender.id, signal: { type: 'room_peer_joined', roomCode: cleanPin, peer: sender } });
+          queue.push({ fromId: sender.id, signal: { type: 'room_peer_joined', roomCode: cleanPin, peer: senderPeer } });
           roomSignals.set(pid, queue);
         }
       }
     }
 
     const peersList = Array.from(room.peers.values()).filter(p => p.id !== sender.id);
-    const target = peersList[0] || { name: 'Remote Peer', id: 'remote', pin: cleanPin };
+    const target = peersList[0] || { name: 'Remote Peer', id: 'remote', pin: cleanPin, isWebRTC: true, isRemote: true };
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, target, peer: target, peers: peersList, roomCode: cleanPin, method: 'webrtc' }));
@@ -223,9 +285,22 @@ module.exports = async (req, res) => {
   if (req.method === 'GET' && (routeParam === 'peers' || fullPath.includes('api/peers') || fullPath.includes('/api/peers'))) {
     const parsedQuery = new URL(req.url, 'http://localhost');
     const clientId = parsedQuery.searchParams.get('clientId') || url.searchParams.get('clientId') || '';
-    const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1').split(',')[0].trim();
     const now = Date.now();
-    const activeCutoff = now - 35000; // Active within last 35 seconds
+    const activeCutoff = now - 90000; // Active within last 90 seconds
+
+    let callingClientPeer = null;
+
+    // Refresh lastSeen for calling client in all rooms and find calling peer record
+    if (clientId) {
+      for (const room of rooms.values()) {
+        if (room.peers.has(clientId)) {
+          const selfPeer = room.peers.get(clientId);
+          selfPeer.lastSeen = now;
+          selfPeer.ip = clientIp;
+          callingClientPeer = selfPeer;
+        }
+      }
+    }
 
     const relevantPeers = [];
     const seen = new Set();
@@ -244,14 +319,18 @@ module.exports = async (req, res) => {
         if (pid === clientId) continue;
         if (seen.has(pid)) continue;
         if (p.id && (p.id.startsWith('omni_') || p.id === 'cloud_node')) continue; // Ignore cloud server nodes
+        if (p.name && p.name.includes('Cloud Node')) continue;
 
-        // Only include if:
-        // 1. Peer is in the SAME room (explicit pairing)
-        // 2. OR peer is on the same local Wi-Fi / IP AND was active recently
-        const isSameWifi = p.ip && p.ip === clientIp && clientIp !== '127.0.0.1';
         const isRecentlyActive = (p.lastSeen || p.createdAt || 0) > activeCutoff;
+        if (!isRecentlyActive) continue;
 
-        if (isClientRoom || (isSameWifi && isRecentlyActive)) {
+        // Peer is eligible if:
+        // 1. Peer is in the SAME room (explicit PIN or QR pairing)
+        // 2. OR peer is on the same local Wi-Fi / LAN network
+        // 3. OR peer shares the same public IP / subnet
+        const isSameNetwork = arePeersInSameNetwork(callingClientPeer || { ip: clientIp }, p, clientIp);
+
+        if (isClientRoom || isSameNetwork) {
           seen.add(pid);
           relevantPeers.push(p);
         }
@@ -296,7 +375,13 @@ module.exports = async (req, res) => {
     }
 
     if (data && data.peer && data.peer.id) {
-      room.peers.set(data.peer.id, data.peer);
+      const p = Object.assign({}, data.peer, {
+        ip: clientIp,
+        lastSeen: Date.now(),
+        isWebRTC: true,
+        isRemote: true
+      });
+      room.peers.set(p.id, p);
     }
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -316,14 +401,21 @@ module.exports = async (req, res) => {
         return;
       }
 
+      const peerRecord = Object.assign({}, peer, {
+        ip: clientIp,
+        lastSeen: Date.now(),
+        isWebRTC: true,
+        isRemote: true
+      });
+
       const existingPeers = Array.from(room.peers.values());
-      room.peers.set(peer.id, peer);
+      room.peers.set(peerRecord.id, peerRecord);
 
       // Queue joined notification for other peers in room
       for (const [pid] of room.peers.entries()) {
-        if (pid !== peer.id) {
+        if (pid !== peerRecord.id) {
           const queue = roomSignals.get(pid) || [];
-          queue.push({ fromId: peer.id, signal: { type: 'room_peer_joined', roomCode, peer } });
+          queue.push({ fromId: peerRecord.id, signal: { type: 'room_peer_joined', roomCode, peer: peerRecord } });
           roomSignals.set(pid, queue);
         }
       }
@@ -346,6 +438,17 @@ module.exports = async (req, res) => {
       queue.push({ fromId, signal, roomCode });
       roomSignals.set(toId, queue);
 
+      // Keep sender active
+      if (fromId) {
+        for (const room of rooms.values()) {
+          if (room.peers.has(fromId)) {
+            const sp = room.peers.get(fromId);
+            sp.lastSeen = Date.now();
+            sp.ip = clientIp;
+          }
+        }
+      }
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
     } catch (err) {
@@ -364,6 +467,16 @@ module.exports = async (req, res) => {
       res.end(JSON.stringify({ error: 'Missing clientId query parameter' }));
       return;
     }
+
+    // Update heartbeat of polling client
+    for (const room of rooms.values()) {
+      if (room.peers.has(clientId)) {
+        const selfPeer = room.peers.get(clientId);
+        selfPeer.lastSeen = Date.now();
+        selfPeer.ip = clientIp;
+      }
+    }
+
     const signals = roomSignals.get(clientId) || [];
     roomSignals.delete(clientId);
 
@@ -372,13 +485,81 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // 11. API 404 Fallback (never serve static files for /api/* requests)
+  // 11. Clipboard Sync API (POST /api/clipboard/sync)
+  if (req.method === 'POST' && (routeParam === 'clipboard/sync' || fullPath.includes('clipboard/sync'))) {
+    const data = await parseJsonBody(req).catch(() => ({}));
+    const { text, targetId, sender } = data;
+    const fromId = (sender && sender.id) || 'unknown';
+
+    if (targetId && targetId !== 'all') {
+      const queue = roomSignals.get(targetId) || [];
+      queue.push({
+        fromId,
+        signal: {
+          type: 'CLIPBOARD',
+          text,
+          isUrl: typeof text === 'string' && /^https?:\/\//i.test(text.trim()),
+          sender: sender || { name: 'Nearby Device' },
+          timestamp: Date.now()
+        }
+      });
+      roomSignals.set(targetId, queue);
+    } else {
+      for (const [pid, queue] of roomSignals.entries()) {
+        if (pid !== fromId) {
+          queue.push({
+            fromId,
+            signal: {
+              type: 'CLIPBOARD',
+              text,
+              isUrl: typeof text === 'string' && /^https?:\/\//i.test(text.trim()),
+              sender: sender || { name: 'Nearby Device' },
+              timestamp: Date.now()
+            }
+          });
+          roomSignals.set(pid, queue);
+        }
+      }
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // 12. Transfer Request API (POST /api/transfer/request)
+  if (req.method === 'POST' && (routeParam === 'transfer/request' || fullPath.includes('transfer/request'))) {
+    const data = await parseJsonBody(req).catch(() => ({}));
+    const { transferId, sender, targetId, files, totalSize } = data;
+
+    if (targetId) {
+      const queue = roomSignals.get(targetId) || [];
+      queue.push({
+        fromId: sender ? sender.id : 'unknown',
+        signal: {
+          type: 'transfer_request',
+          transferId,
+          sender,
+          targetId,
+          files,
+          totalSize
+        }
+      });
+      roomSignals.set(targetId, queue);
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, accepted: true }));
+    return;
+  }
+
+  // 13. API 404 Fallback (never serve static files for /api/* requests)
   if (routeParam || url.pathname.startsWith('/api/') || (req.query && req.query.slug)) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'API endpoint not found', path: url.pathname, routeParam }));
     return;
   }
 
-  // 12. Static frontend files fallback (/, /style.css, /app.js, /manifest.json, etc.)
+  // 14. Static frontend files fallback
   serveStatic(req, res, url.pathname);
 };

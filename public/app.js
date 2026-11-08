@@ -471,6 +471,27 @@
   let roomPollingTimer = null;
   let activeWebRTCOutgoing = null;
   let currentWebRTCReceiving = null;
+  const pendingSendFilesQueue = new Map(); // targetId -> { targetPeer, files }
+
+  // Detect local subnet LAN IP via WebRTC host candidate
+  function detectLocalLanIp() {
+    try {
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      pc.createDataChannel('lan-ip-probe');
+      pc.createOffer().then(offer => pc.setLocalDescription(offer)).catch(() => {});
+      pc.onicecandidate = (e) => {
+        if (e && e.candidate && e.candidate.candidate) {
+          const parts = e.candidate.candidate.split(' ');
+          const ip = parts[4];
+          if (ip && (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.'))) {
+            if (myInfo) myInfo.localLanIp = ip;
+            try { pc.close(); } catch (err) {}
+          }
+        }
+      };
+      setTimeout(() => { try { pc.close(); } catch (err) {} }, 3000);
+    } catch (e) {}
+  }
 
   // --- Background Transfer Keepalive & Screen Wake Lock ---
   let activeWakeLock = null;
@@ -559,7 +580,10 @@
   function getActiveUniquePeers() {
     const unique = new Map();
     for (const peer of peersMap.values()) {
+      if (!peer || !peer.id) continue;
       if (peer.id === myInfo.id || peer.id === myClientId) continue;
+      if (peer.id === 'cloud_node' || peer.id.startsWith('omni_')) continue;
+      if (peer.name && peer.name.includes('Cloud Node')) continue;
       // Deduplicate by IP address if present, otherwise by ID
       const key = (peer.isRemote || peer.isWebRTC)
         ? peer.id
@@ -591,7 +615,8 @@
           name: myInfo.name || `${clientOS.toUpperCase()} Device`,
           deviceType: myInfo.deviceType || clientType,
           os: myInfo.os || clientOS,
-          pin: storedPin || undefined
+          pin: storedPin || undefined,
+          localLanIp: myInfo.localLanIp || undefined
         })
       });
       if (regRes.ok) {
@@ -615,6 +640,7 @@
 
   // --- Fetch Self Info & Setup SSE ---
   async function initSelf() {
+    detectLocalLanIp();
     const { clientOS, clientType } = detectClientDevice();
     const isRemoteClient = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
 
@@ -855,12 +881,28 @@
       }
 
       for (const peer of list) {
-        if (peer.id !== (myInfo.id || myClientId) && !peer.id.startsWith('omni_') && peer.id !== 'cloud_node') {
-          const old = peersMap.get(peer.id);
-          if (!old || old.name !== peer.name || old.ip !== peer.ip || old.pin !== peer.pin) {
-            hasChanges = true;
+        if (!peer || !peer.id) continue;
+        if (peer.id === (myInfo.id || myClientId) || peer.id.startsWith('omni_') || peer.id === 'cloud_node') continue;
+        if (peer.name && peer.name.includes('Cloud Node')) continue;
+
+        const old = peersMap.get(peer.id);
+        if (!old || old.name !== peer.name || old.ip !== peer.ip || old.pin !== peer.pin) {
+          hasChanges = true;
+        }
+        peersMap.set(peer.id, peer);
+
+        // Auto-connect WebRTC DataChannel for discovered remote/cloud peers
+        const isRemoteEnv = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+        if (isRemoteEnv || peer.isWebRTC || peer.isRemote) {
+          peer.isWebRTC = true;
+          peer.isRemote = true;
+          const myId = myInfo.id || myClientId;
+          const targetRoom = peer.roomCode || peer.pin || currentRemoteRoomCode;
+          // Glare-free negotiation: device with lexicographically smaller ID initiates offer
+          const shouldInitiate = myId < peer.id;
+          if (!webrtcConnections.has(peer.id)) {
+            createWebRTCPeerConnection(peer.id, peer, targetRoom, shouldInitiate);
           }
-          peersMap.set(peer.id, peer);
         }
       }
 
@@ -1147,13 +1189,44 @@
   async function initiateSendFiles(targetPeer, files) {
     if (!files || files.length === 0) return;
 
-    // Check if target is connected via WebRTC P2P (Worldwide Remote)
-    if (targetPeer.isWebRTC || webrtcConnections.has(targetPeer.id)) {
-      const conn = webrtcConnections.get(targetPeer.id);
+    const isRemoteEnv = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+
+    // Check if target is connected via WebRTC P2P (Worldwide Remote or Cloud Vercel)
+    if (targetPeer.isWebRTC || webrtcConnections.has(targetPeer.id) || isRemoteEnv) {
+      targetPeer.isWebRTC = true;
+      targetPeer.isRemote = true;
+      let conn = webrtcConnections.get(targetPeer.id);
+
       if (conn && conn.dc && conn.dc.readyState === 'open') {
         return initiateWebRTCSendFiles(targetPeer, files, conn.dc);
       } else {
-        showToast(`⚠️ WebRTC connection with ${targetPeer.name} is connecting... please wait`);
+        // Enqueue files to automatically drain the moment DataChannel finishes opening
+        pendingSendFilesQueue.set(targetPeer.id, { targetPeer, files });
+
+        if (!conn) {
+          const roomCode = targetPeer.roomCode || targetPeer.pin || currentRemoteRoomCode;
+          conn = createWebRTCPeerConnection(targetPeer.id, targetPeer, roomCode, true);
+        }
+
+        showToast(`🔒 Connecting direct P2P link to ${targetPeer.name}... Transfer will start automatically!`);
+
+        const progressModal = document.getElementById('modal-progress');
+        if (progressModal) {
+          document.getElementById('progress-title').textContent = 'Connecting P2P...';
+          document.getElementById('progress-target').textContent = `Establishing direct link to ${targetPeer.name}...`;
+          document.getElementById('progress-percentage').textContent = '⏳';
+          document.getElementById('progress-speed').textContent = 'Connecting';
+          document.getElementById('progress-filename').textContent = `${files.length} file(s) (${formatBytes(files.reduce((acc, f) => acc + f.size, 0))})`;
+          progressModal.style.display = 'flex';
+        }
+
+        setTimeout(() => {
+          if (pendingSendFilesQueue.has(targetPeer.id)) {
+            pendingSendFilesQueue.delete(targetPeer.id);
+            if (progressModal) progressModal.style.display = 'none';
+            showToast(`⚠️ Direct P2P link to ${targetPeer.name} timed out. You can also pair instantly using their 6-digit PIN.`);
+          }
+        }, 12000);
         return;
       }
     }
@@ -1710,6 +1783,13 @@
       peersMap.set(targetId, peer);
       renderRadarPeers();
       playChime('incoming');
+
+      // Auto-drain any pending file transfer queued for this peer
+      if (pendingSendFilesQueue.has(targetId)) {
+        const item = pendingSendFilesQueue.get(targetId);
+        pendingSendFilesQueue.delete(targetId);
+        initiateWebRTCSendFiles(item.targetPeer, item.files, dc);
+      }
     };
 
     dc.onclose = () => {
@@ -1835,33 +1915,7 @@
 
       case 'CLIPBOARD':
         // Universal AirDrop Continuity over WebRTC
-        playChime('incoming');
-        triggerHaptic('medium');
-
-        const autoClip = document.getElementById('setting-auto-clipboard')?.checked ?? true;
-        if (autoClip && navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(msg.text).catch(() => {});
-        }
-
-        saveSnippet({
-          text: msg.text,
-          isUrl: msg.isUrl,
-          sender: msg.sender || peer,
-          direction: 'received',
-          timestamp: msg.timestamp || Date.now()
-        });
-
-        const preview = msg.text.length > 55 ? msg.text.slice(0, 52) + '...' : msg.text;
-        showRichToast({
-          title: `🌐 AirDrop Continuity from ${peer.name}`,
-          preview: preview,
-          isUrl: msg.isUrl,
-          url: msg.isUrl ? msg.text : null,
-          onCopy: () => {
-            navigator.clipboard?.writeText(msg.text).catch(() => {});
-            triggerHaptic('light');
-          }
-        });
+        handleIncomingClipboardMessage(msg, peer);
         break;
     }
   }
@@ -2097,7 +2151,8 @@
             name: myInfo.name,
             os: myInfo.os,
             deviceType: myInfo.deviceType,
-            pin: myInfo.pin
+            pin: myInfo.pin,
+            localLanIp: myInfo.localLanIp || undefined
           }
         })
       });
@@ -2158,7 +2213,8 @@
             name: myInfo.name,
             os: myInfo.os,
             deviceType: myInfo.deviceType,
-            pin: myInfo.pin
+            pin: myInfo.pin,
+            localLanIp: myInfo.localLanIp || undefined
           }
         })
       });
@@ -2196,6 +2252,38 @@
     }
   }
 
+  function handleIncomingClipboardMessage(msg, peer) {
+    if (!msg || !msg.text) return;
+    playChime('incoming');
+    triggerHaptic('medium');
+
+    const autoClip = document.getElementById('setting-auto-clipboard')?.checked ?? true;
+    if (autoClip && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(msg.text).catch(() => {});
+    }
+
+    const senderObj = msg.sender || peer || { name: 'Nearby Device' };
+    saveSnippet({
+      text: msg.text,
+      isUrl: msg.isUrl,
+      sender: senderObj,
+      direction: 'received',
+      timestamp: msg.timestamp || Date.now()
+    });
+
+    const preview = msg.text.length > 55 ? msg.text.slice(0, 52) + '...' : msg.text;
+    showRichToast({
+      title: `🌐 AirDrop Continuity from ${senderObj.name || 'Nearby Device'}`,
+      preview: preview,
+      isUrl: msg.isUrl,
+      url: msg.isUrl ? msg.text : null,
+      onCopy: () => {
+        navigator.clipboard?.writeText(msg.text).catch(() => {});
+        triggerHaptic('light');
+      }
+    });
+  }
+
   // Polling fallback for serverless / Vercel platforms without persistent SSE
   function startRoomPolling() {
     if (roomPollingTimer) return;
@@ -2206,8 +2294,23 @@
         const res = await fetch(`/api/room/signals?clientId=${encodeURIComponent(myId)}`);
         const data = await res.json();
         if (data.ok && Array.isArray(data.signals) && data.signals.length > 0) {
-          for (const sig of data.signals) {
-            handleWebRTCSignal(sig);
+          for (const item of data.signals) {
+            const sig = item.signal || item;
+            if (sig && sig.type === 'CLIPBOARD') {
+              const senderPeer = (sig.sender && sig.sender.id && peersMap.get(sig.sender.id)) || peersMap.get(item.fromId) || { name: (sig.sender && sig.sender.name) || 'Nearby Device' };
+              handleIncomingClipboardMessage(sig, senderPeer);
+            } else if (sig && sig.type === 'transfer_request') {
+              handleIncomingTransferPrompt({
+                transferId: sig.transferId,
+                sender: sig.sender || { name: 'Nearby Device' },
+                files: sig.files,
+                totalSize: sig.totalSize,
+                formattedSize: formatBytes(sig.totalSize || 0),
+                isWebRTC: false
+              });
+            } else {
+              handleWebRTCSignal(item);
+            }
           }
         }
       } catch (e) {}
@@ -2528,7 +2631,8 @@
             name: myInfo.name,
             os: myInfo.os,
             deviceType: myInfo.deviceType,
-            pin: myInfo.pin
+            pin: myInfo.pin,
+            localLanIp: myInfo.localLanIp || undefined
           }
         })
       });
@@ -2874,7 +2978,8 @@
         body: JSON.stringify({
           text: trimmed,
           targetId: targetId,
-          broadcast: targetId === 'all'
+          broadcast: targetId === 'all',
+          sender: { id: myInfo.id || myClientId, name: myInfo.name }
         })
       });
 
