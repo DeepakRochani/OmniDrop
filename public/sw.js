@@ -1,4 +1,4 @@
-const CACHE_NAME = 'omnidrop-cache-v5';
+const CACHE_NAME = 'omnidrop-cache-v6';
 const ASSETS = [
   '/',
   '/index.html',

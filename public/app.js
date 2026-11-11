@@ -656,14 +656,7 @@
     if (payload.type === 'TRANSFER_RESPONSE') {
       if (payload.accepted) {
         if (activeWebRTCOutgoing && activeWebRTCOutgoing.transferId === payload.transferId) {
-          if (!activeWebRTCOutgoing.streamingStarted) {
-            activeWebRTCOutgoing.streamingStarted = true;
-            if (activeWebRTCOutgoing.dc && (activeWebRTCOutgoing.dc.readyState === 'open' || activeWebRTCOutgoing.dc.open)) {
-              streamFilesOverWebRTCDataChannel(activeWebRTCOutgoing);
-            } else {
-              streamFilesOverSupabase(activeWebRTCOutgoing);
-            }
-          }
+          startOutgoingTransferStream(activeWebRTCOutgoing);
         }
       } else {
         const progressModal = document.getElementById('modal-progress');
@@ -1719,45 +1712,29 @@
 
     const isCloud = isCloudServerlessEnv();
 
-    // Check if target is connected via WebRTC P2P (ONLY for Cloud Vercel serverless environment)
-    if (isCloud && (targetPeer.isWebRTC || targetPeer.isRemote || webrtcConnections.has(targetPeer.id))) {
+    // Check if target is connected via WebRTC P2P or Cloud Vercel serverless environment
+    if (isCloud || targetPeer.isWebRTC || targetPeer.isRemote || webrtcConnections.has(targetPeer.id)) {
       targetPeer.isWebRTC = true;
       targetPeer.isRemote = true;
       const targetPeerId = targetPeer.peerId || (targetPeer.pin ? ('od_' + targetPeer.pin) : targetPeer.id);
       let conn = webrtcConnections.get(targetPeer.id) || webrtcConnections.get(targetPeerId) || (targetPeer.pin ? webrtcConnections.get(targetPeer.pin) : null);
 
-      if (conn && conn.dc && (conn.dc.readyState === 'open' || conn.dc.open)) {
-        return initiateWebRTCSendFiles(targetPeer, files, conn.dc);
-      } else {
-        // Enqueue files to automatically drain the moment DataChannel finishes opening
-        pendingSendFilesQueue.set(targetPeer.id, { targetPeer, files });
-        if (targetPeer.pin) pendingSendFilesQueue.set('pin_' + targetPeer.pin, { targetPeer, files });
-        if (targetPeerId) pendingSendFilesQueue.set(targetPeerId, { targetPeer, files });
-
-        // Connect via built-in WebRTC signaling
-        const roomCode = targetPeer.roomCode || targetPeer.pin || currentRemoteRoomCode;
-        if (!conn || !conn.pc || conn.pc.connectionState === 'failed' || conn.pc.connectionState === 'closed') {
-          conn = createWebRTCPeerConnection(targetPeer.id, targetPeer, roomCode, true);
-        }
-
-        // Fast fallback: If WebRTC DataChannel doesn't open within 3 seconds,
-        // proceed immediately with transfer request via Supabase Realtime!
-        setTimeout(() => {
-          const hasPending = pendingSendFilesQueue.has(targetPeer.id) ||
-            (targetPeer.pin && pendingSendFilesQueue.has('pin_' + targetPeer.pin)) ||
-            (targetPeerId && pendingSendFilesQueue.has(targetPeerId));
-
-          if (hasPending) {
-            pendingSendFilesQueue.delete(targetPeer.id);
-            if (targetPeer.pin) pendingSendFilesQueue.delete('pin_' + targetPeer.pin);
-            if (targetPeerId) pendingSendFilesQueue.delete(targetPeerId);
-
-            const activeDc = conn && conn.dc && (conn.dc.readyState === 'open' || conn.dc.open) ? conn.dc : null;
-            initiateWebRTCSendFiles(targetPeer, files, activeDc);
-          }
-        }, 3000);
-        return;
+      const roomCode = targetPeer.roomCode || targetPeer.pin || currentRemoteRoomCode;
+      if (!conn || !conn.pc || conn.pc.connectionState === 'failed' || conn.pc.connectionState === 'closed') {
+        conn = createWebRTCPeerConnection(targetPeer.id, targetPeer, roomCode, true);
+      } else if (!conn.dc || conn.dc.readyState === 'closed') {
+        try {
+          const dc = conn.pc.createDataChannel('omnidrop-transfer', { ordered: true });
+          conn.dc = dc;
+          setupWebRTCDataChannel(dc, targetPeer.id, targetPeer);
+        } catch (e) {}
       }
+
+      // Immediately initiate file transfer handshake with recipient!
+      // This displays the "Waiting for Recipient..." modal on sender,
+      // and sends TRANSFER_REQUEST via Supabase Realtime + DataChannel!
+      const activeDc = conn && conn.dc && (conn.dc.readyState === 'open' || conn.dc.open) ? conn.dc : null;
+      return initiateWebRTCSendFiles(targetPeer, files, activeDc);
     }
 
     let totalSize = 0;
@@ -2066,36 +2043,18 @@
   function triggerAutoDownload(url, filename) {
     if (!url) return;
 
-    // Method 1: Invisible HTML5 anchor with download attribute
     try {
       const a = document.createElement('a');
       a.href = url;
       a.download = filename || 'download';
-      a.target = '_blank';
-      a.rel = 'noopener';
       a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
       setTimeout(() => {
         if (a.parentNode) a.parentNode.removeChild(a);
-      }, 2000);
+      }, 1500);
     } catch (err) {
       console.warn('Anchor auto-download failed:', err);
-    }
-
-    // Method 2: iOS Safari WebKit iframe fallback
-    const ua = navigator.userAgent || '';
-    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    if (isIOS) {
-      try {
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = url;
-        document.body.appendChild(iframe);
-        setTimeout(() => {
-          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-        }, 30000);
-      } catch (e) {}
     }
   }
 
@@ -2115,23 +2074,76 @@
     const totalCount = files.length || comp.totalFiles || 1;
     const displayName = files[0] ? (files[0].originalName || files[0].name || comp.fileName) : 'file';
 
-    const isHost = (myInfo.isHost || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const ua = navigator.userAgent || '';
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-    if (isHost) {
-      showToast(`✅ Received ${totalCount > 1 ? totalCount + ' files' : displayName}! Saved directly to Downloads.`, 4500);
+    if (isMobile) {
+      showToast(`🎉 Received ${displayName}! Tap Save File to save.`, 5000);
+
+      // Display the File Ready modal with a clear tap-to-save button for iOS / Android
+      const readyModal = document.getElementById('modal-file-ready');
+      if (readyModal) {
+        const nameEl = document.getElementById('file-ready-name');
+        if (nameEl) nameEl.textContent = displayName;
+        const sizeEl = document.getElementById('file-ready-size');
+        if (sizeEl) sizeEl.textContent = formatBytes(files[0]?.size || comp.totalSize || 0);
+
+        const saveBtn = document.getElementById('file-ready-download-link');
+        if (saveBtn) {
+          const firstUrl = files[0]?.downloadUrl || `/api/download/${encodeURIComponent(displayName)}`;
+          saveBtn.href = firstUrl;
+          saveBtn.download = displayName;
+
+          // Wire up Native Share Sheet for iPhone / Android touch gesture
+          saveBtn.onclick = async (e) => {
+            if (files[0]?.blob && navigator.canShare) {
+              try {
+                const fileObj = new File([files[0].blob], displayName, { type: files[0].blob.type || 'application/octet-stream' });
+                if (navigator.canShare({ files: [fileObj] })) {
+                  e.preventDefault();
+                  await navigator.share({
+                    files: [fileObj],
+                    title: displayName
+                  });
+                  setTimeout(() => { readyModal.style.display = 'none'; }, 600);
+                  return;
+                }
+              } catch (err) {
+                console.warn('Native share notice:', err);
+              }
+            }
+          };
+        }
+
+        readyModal.style.display = 'flex';
+      }
+
+      // Also attempt background download
+      files.forEach((file, index) => {
+        if (file.directSaved || file.downloaded) return;
+        file.downloaded = true;
+        setTimeout(() => {
+          const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || file.fileName)}`;
+          const name = file.name || file.fileName;
+          triggerAutoDownload(url, name);
+        }, index * 300);
+      });
+
     } else {
-      showToast(`✅ Received ${totalCount > 1 ? totalCount + ' files' : displayName}! Downloading automatically...`, 4500);
-    }
+      // Desktop (Mac / PC): Zero-click automatic save to Downloads folder
+      showToast(`✅ Received ${totalCount > 1 ? totalCount + ' files' : displayName}! Saved directly to Downloads.`, 4500);
 
-    // Direct automatic download of all files - ZERO manual clicks needed!
-    files.forEach((file, index) => {
-      if (file.directSaved) return; // Already saved directly to hard drive!
-      setTimeout(() => {
-        const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || file.fileName)}`;
-        const name = file.name || file.fileName;
-        triggerAutoDownload(url, name);
-      }, index * 300);
-    });
+      // Trigger automatic zero-click download ONCE per file (no duplicate downloads!)
+      files.forEach((file, index) => {
+        if (file.directSaved || file.downloaded) return;
+        file.downloaded = true;
+        setTimeout(() => {
+          const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || file.fileName)}`;
+          const name = file.name || file.fileName;
+          triggerAutoDownload(url, name);
+        }, index * 300);
+      });
+    }
   }
 
   function onTransferComplete(comp) {
@@ -2418,7 +2430,7 @@
         // Sender receives recipient's accept / decline response
         if (msg.accepted) {
           if (activeWebRTCOutgoing && activeWebRTCOutgoing.transferId === msg.transferId) {
-            streamFilesOverWebRTCDataChannel(activeWebRTCOutgoing);
+            startOutgoingTransferStream(activeWebRTCOutgoing);
           }
         } else {
           document.getElementById('modal-progress').style.display = 'none';
@@ -2461,14 +2473,12 @@
             const blobUrl = URL.createObjectURL(blob);
             const savedItem = {
               name: currentWebRTCReceiving.currentFileName,
+              blob: blob,
               downloadUrl: blobUrl,
               size: currentWebRTCReceiving.currentFileSize
             };
             currentWebRTCReceiving.receivedBlobs.push(savedItem);
             currentWebRTCReceiving.fileBlobParts = [];
-
-            // Trigger automatic zero-click download immediately
-            triggerAutoDownload(blobUrl, currentWebRTCReceiving.currentFileName);
           }
         }
         break;
@@ -2594,6 +2604,29 @@
         totalSize
       });
     }
+  }
+
+  // Unified outgoing transfer starter to guarantee streaming starts exactly once
+  function startOutgoingTransferStream(outgoing) {
+    if (!outgoing || outgoing.streamingStarted) return;
+    outgoing.streamingStarted = true;
+
+    // 1. Check if outgoing already has an open DataChannel
+    if (outgoing.dc && (outgoing.dc.readyState === 'open' || outgoing.dc.open)) {
+      streamFilesOverWebRTCDataChannel(outgoing);
+      return;
+    }
+
+    // 2. Check if peer connection has an active DataChannel
+    const altConn = webrtcConnections.get(outgoing.targetPeer?.id);
+    if (altConn && altConn.dc && (altConn.dc.readyState === 'open' || altConn.dc.open)) {
+      outgoing.dc = altConn.dc;
+      streamFilesOverWebRTCDataChannel(outgoing);
+      return;
+    }
+
+    // 3. Fallback to Supabase Realtime WebSocket streaming
+    streamFilesOverSupabase(outgoing);
   }
 
   // Fallback high-speed WebSocket streaming over Supabase Realtime for restrictive networks
