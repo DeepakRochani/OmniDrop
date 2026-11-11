@@ -488,6 +488,23 @@
     ]
   };
 
+  // IP comparison helper for exact matching (same Wi-Fi router / NAT or IPv6 prefix)
+  function isIpMatch(ip1, ip2) {
+    if (!ip1 || !ip2) return false;
+    if (ip1 === ip2) return true;
+    const c1 = ip1.replace(/^::ffff:/, '').trim();
+    const c2 = ip2.replace(/^::ffff:/, '').trim();
+    if (c1 === c2) return true;
+    if (c1.includes(':') && c2.includes(':')) {
+      const p1 = c1.split(':').slice(0, 4).join(':');
+      const p2 = c2.split(':').slice(0, 4).join(':');
+      if (p1 && p1 === p2) return true;
+    }
+    return false;
+  }
+
+  const pendingPairResolvers = new Map(); // pin/peerId -> callback
+
   // --- Supabase Realtime Universal Event & Signal Router ---
   function handleSupabaseSignal(payload, topic) {
     if (!payload || typeof payload !== 'object') return;
@@ -498,7 +515,11 @@
       if (p.id === (myInfo.id || myClientId)) return;
       if (p.pin && myInfo.pin && p.pin === myInfo.pin) return;
 
-      const sameNet = (!myInfo.ip || !p.ip || myInfo.ip === p.ip || (p.localLanIp && p.localLanIp === myInfo.localLanIp) || isCloudServerlessEnv());
+      // Filter: Show peers that are on the same local Wi-Fi / LAN or same public IP
+      const sameNet = (!isCloudServerlessEnv()) ||
+        (myInfo.ip && p.ip && isIpMatch(myInfo.ip, p.ip)) ||
+        (myInfo.localLanIp && p.localLanIp && isIpMatch(myInfo.localLanIp, p.localLanIp));
+
       if (sameNet) {
         p.isWebRTC = true;
         p.isRemote = true;
@@ -508,9 +529,11 @@
         if (p.pin) peersMap.set('pin_' + p.pin, p);
         renderRadarPeers();
 
+        // If newly discovered nearby peer, send RADAR_REPLY back directly
         if (isNew && window.OmniDropSupabase) {
           window.OmniDropSupabase.sendToPeer(p.id, {
             type: 'RADAR_REPLY',
+            targetId: p.id,
             peer: {
               id: myInfo.id || myClientId,
               name: myInfo.name,
@@ -556,12 +579,14 @@
       if (window.OmniDropSupabase) {
         window.OmniDropSupabase.sendToPeer(sender.id, {
           type: 'PAIR_ACCEPT',
+          targetId: sender.id,
           peer: {
             id: myInfo.id || myClientId,
             name: myInfo.name,
             os: myInfo.os,
             deviceType: myInfo.deviceType,
-            pin: myInfo.pin
+            pin: myInfo.pin,
+            ip: myInfo.ip
           }
         });
       }
@@ -581,6 +606,14 @@
       if (target.pin) peersMap.set('pin_' + target.pin, target);
       renderRadarPeers();
 
+      // Resolve pending directPairByPin promise
+      if (target.pin && pendingPairResolvers.has(target.pin)) {
+        pendingPairResolvers.get(target.pin)(target);
+      }
+      if (target.id && pendingPairResolvers.has(target.id)) {
+        pendingPairResolvers.get(target.id)(target);
+      }
+
       playChime('incoming');
       triggerHaptic('medium');
       showToast(`✨ Connected to ${target.name}! Tap device to beam files.`);
@@ -590,7 +623,7 @@
       const qrModal = document.getElementById('modal-qr');
       if (qrModal) qrModal.style.display = 'none';
 
-      // Join target's room and initiate WebRTC offer
+      // Initiate WebRTC offer to target peer
       createWebRTCPeerConnection(target.id, target, target.pin, true);
       return;
     }
@@ -625,7 +658,11 @@
         if (activeWebRTCOutgoing && activeWebRTCOutgoing.transferId === payload.transferId) {
           if (!activeWebRTCOutgoing.streamingStarted) {
             activeWebRTCOutgoing.streamingStarted = true;
-            streamFilesOverWebRTCDataChannel(activeWebRTCOutgoing);
+            if (activeWebRTCOutgoing.dc && (activeWebRTCOutgoing.dc.readyState === 'open' || activeWebRTCOutgoing.dc.open)) {
+              streamFilesOverWebRTCDataChannel(activeWebRTCOutgoing);
+            } else {
+              streamFilesOverSupabase(activeWebRTCOutgoing);
+            }
           }
         }
       } else {
@@ -637,7 +674,29 @@
       return;
     }
 
-    // 6. Clipboard Sync
+    // 6. Supabase Chunk Streaming Fallback
+    if (payload.type === 'TRANSFER_CHUNK') {
+      try {
+        const binaryString = atob(payload.chunk);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        handleWebRTCBinaryChunk(bytes.buffer);
+      } catch (e) {
+        console.error('Error decoding Supabase chunk:', e);
+      }
+      return;
+    }
+
+    if (payload.type === 'FILE_START' || payload.type === 'FILE_END' || payload.type === 'TRANSFER_COMPLETE') {
+      const senderPeer = peersMap.get(payload.fromId) || { id: payload.fromId, name: 'Remote Peer' };
+      handleWebRTCControlMessage(payload, payload.fromId, senderPeer, null);
+      return;
+    }
+
+    // 7. Clipboard Sync
     if (payload.type === 'CLIPBOARD') {
       handleIncomingClipboardMessage(payload, payload.sender);
       return;
@@ -1044,6 +1103,9 @@
           try { localStorage.setItem('omnidrop_pin', regData.pin); } catch (e) {}
           updatePinDisplays(regData.pin);
           initPeerJS(regData.pin);
+          if (window.OmniDropSupabase) {
+            window.OmniDropSupabase.updateSelf(myInfo.id || myClientId, regData.pin);
+          }
         }
       }
     } catch (e) {
@@ -1104,7 +1166,10 @@
       const res = await fetch('/api/me');
       if (res.ok) {
         const data = await res.json();
-        if (data && data.id) {
+        if (data) {
+          if (data.ip) {
+            myInfo.ip = data.ip;
+          }
           if (!isRemoteClient) {
             myInfo = Object.assign({}, myInfo, data);
             if (data.pin) myInfo.pin = data.pin;
@@ -1126,6 +1191,7 @@
     // Initialize Supabase Realtime (Worldwide 0-server signaling & instant radar presence)
     if (window.OmniDropSupabase) {
       window.OmniDropSupabase.init(myInfo.id || myClientId, myInfo.pin, handleSupabaseSignal);
+      window.OmniDropSupabase.updateSelf(myInfo.id || myClientId, myInfo.pin);
       window.OmniDropSupabase.broadcastRadar({
         id: myInfo.id || myClientId,
         name: myInfo.name,
@@ -1665,7 +1731,7 @@
       } else {
         // Enqueue files to automatically drain the moment DataChannel finishes opening
         pendingSendFilesQueue.set(targetPeer.id, { targetPeer, files });
-        if (targetPeer.pin) pendingSendFilesQueue.set('od_' + targetPeer.pin, { targetPeer, files });
+        if (targetPeer.pin) pendingSendFilesQueue.set('pin_' + targetPeer.pin, { targetPeer, files });
         if (targetPeerId) pendingSendFilesQueue.set(targetPeerId, { targetPeer, files });
 
         // Connect via built-in WebRTC signaling
@@ -1674,30 +1740,22 @@
           conn = createWebRTCPeerConnection(targetPeer.id, targetPeer, roomCode, true);
         }
 
-        // Also try PeerJS if available
-        connectPeerViaPeerJS(targetPeer);
-
-        showToast(`🔒 Connecting direct P2P link to ${targetPeer.name}... Transfer will start automatically!`);
-
-        const progressModal = document.getElementById('modal-progress');
-        if (progressModal) {
-          document.getElementById('progress-title').textContent = 'Connecting P2P...';
-          document.getElementById('progress-target').textContent = `Establishing direct link to ${targetPeer.name}...`;
-          document.getElementById('progress-percentage').textContent = '⏳';
-          document.getElementById('progress-speed').textContent = 'Connecting';
-          document.getElementById('progress-filename').textContent = `${files.length} file(s) (${formatBytes(files.reduce((acc, f) => acc + f.size, 0))})`;
-          progressModal.style.display = 'flex';
-        }
-
+        // Fast fallback: If WebRTC DataChannel doesn't open within 3 seconds,
+        // proceed immediately with transfer request via Supabase Realtime!
         setTimeout(() => {
-          if (pendingSendFilesQueue.has(targetPeer.id)) {
+          const hasPending = pendingSendFilesQueue.has(targetPeer.id) ||
+            (targetPeer.pin && pendingSendFilesQueue.has('pin_' + targetPeer.pin)) ||
+            (targetPeerId && pendingSendFilesQueue.has(targetPeerId));
+
+          if (hasPending) {
             pendingSendFilesQueue.delete(targetPeer.id);
-            if (progressModal && progressModal.style.display !== 'none' && document.getElementById('progress-title').textContent.includes('Connecting')) {
-              progressModal.style.display = 'none';
-              showToast(`⚠️ Direct P2P link to ${targetPeer.name} timed out. You can also pair instantly using their 6-digit PIN.`);
-            }
+            if (targetPeer.pin) pendingSendFilesQueue.delete('pin_' + targetPeer.pin);
+            if (targetPeerId) pendingSendFilesQueue.delete(targetPeerId);
+
+            const activeDc = conn && conn.dc && (conn.dc.readyState === 'open' || conn.dc.open) ? conn.dc : null;
+            initiateWebRTCSendFiles(targetPeer, files, activeDc);
           }
-        }, 15000);
+        }, 3000);
         return;
       }
     }
@@ -2105,6 +2163,7 @@
   async function sendWebRTCSignal(toId, signal, roomCode) {
     signal.fromId = myInfo.id || myClientId;
     signal.toId = toId;
+    signal.targetId = toId;
     signal.roomCode = roomCode || currentRemoteRoomCode;
 
     // 1. Supabase Realtime (Instant, direct WebSocket delivery in <5ms)
@@ -2235,7 +2294,8 @@
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        sendWebRTCSignal(targetId, { type: 'candidate', candidate: event.candidate }, roomCode);
+        const cand = event.candidate.toJSON ? event.candidate.toJSON() : event.candidate;
+        sendWebRTCSignal(targetId, { type: 'candidate', candidate: cand }, roomCode);
       }
     };
 
@@ -2290,13 +2350,19 @@
       peer.isWebRTC = true;
       peer.isRemote = true;
       peersMap.set(targetId, peer);
+      if (peer.pin) peersMap.set('pin_' + peer.pin, peer);
       renderRadarPeers();
       playChime('incoming');
 
       // Auto-drain any pending file transfer queued for this peer
-      if (pendingSendFilesQueue.has(targetId)) {
-        const item = pendingSendFilesQueue.get(targetId);
+      let item = pendingSendFilesQueue.get(targetId);
+      if (!item && peer.pin) item = pendingSendFilesQueue.get('pin_' + peer.pin) || pendingSendFilesQueue.get('od_' + peer.pin);
+      if (item) {
         pendingSendFilesQueue.delete(targetId);
+        if (peer.pin) {
+          pendingSendFilesQueue.delete('pin_' + peer.pin);
+          pendingSendFilesQueue.delete('od_' + peer.pin);
+        }
         initiateWebRTCSendFiles(item.targetPeer, item.files, dc);
       }
     };
@@ -2492,6 +2558,7 @@
       fileMetaList,
       totalSize,
       dc,
+      streamingStarted: false,
       cancelRequested: false
     };
 
@@ -2526,6 +2593,125 @@
         files: fileMetaList,
         totalSize
       });
+    }
+  }
+
+  // Fallback high-speed WebSocket streaming over Supabase Realtime for restrictive networks
+  async function streamFilesOverSupabase(outgoing) {
+    const { transferId, targetPeer, files, fileMetaList, totalSize } = outgoing;
+    const progressModal = document.getElementById('modal-progress');
+    document.getElementById('progress-title').textContent = 'Streaming Files...';
+    document.getElementById('progress-target').textContent = `Transferring to ${targetPeer.name}`;
+
+    const chunkSize = 32 * 1024; // 32 KB per chunk
+    let grandBytesSent = 0;
+    const startTime = Date.now();
+    let lastSampleTime = startTime;
+    let lastSampleBytes = 0;
+
+    acquireTransferWakeLock();
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        if (outgoing.cancelRequested) break;
+        const file = files[i];
+        const initialTotalChunks = Math.ceil(file.size / chunkSize);
+
+        // 1. Send FILE_START
+        window.OmniDropSupabase.sendToPeer(targetPeer.id, {
+          type: 'FILE_START',
+          transferId,
+          fromId: myInfo.id || myClientId,
+          fileIndex: i,
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type || 'application/octet-stream',
+          totalChunks: initialTotalChunks
+        });
+
+        let offset = 0;
+        let chunkIndex = 0;
+
+        while (offset < file.size) {
+          if (outgoing.cancelRequested) break;
+          const slice = file.slice(offset, offset + chunkSize);
+          const buffer = await slice.arrayBuffer();
+          offset += buffer.byteLength;
+
+          // Convert ArrayBuffer to base64
+          let binary = '';
+          const bytes = new Uint8Array(buffer);
+          const len = bytes.byteLength;
+          for (let b = 0; b < len; b++) {
+            binary += String.fromCharCode(bytes[b]);
+          }
+          const base64Chunk = btoa(binary);
+
+          window.OmniDropSupabase.sendToPeer(targetPeer.id, {
+            type: 'TRANSFER_CHUNK',
+            transferId,
+            fromId: myInfo.id || myClientId,
+            fileIndex: i,
+            chunkIndex: chunkIndex++,
+            chunk: base64Chunk
+          });
+
+          grandBytesSent += buffer.byteLength;
+
+          const now = Date.now();
+          const sampleDeltaMs = now - lastSampleTime;
+          if (sampleDeltaMs >= 200 || offset >= file.size) {
+            const bytesDelta = grandBytesSent - lastSampleBytes;
+            const instantSpeed = sampleDeltaMs > 0 ? (bytesDelta / sampleDeltaMs) * 1000 : 0;
+            const percentage = Math.min(100, Math.round((grandBytesSent / totalSize) * 100));
+
+            updateProgressDisplay({
+              percentage,
+              speedFormatted: formatTransferSpeed(instantSpeed),
+              fileName: `${file.name} (${i + 1}/${files.length})`,
+              fileBytes: offset,
+              fileTotal: file.size
+            });
+
+            lastSampleTime = now;
+            lastSampleBytes = grandBytesSent;
+          }
+
+          if (chunkIndex % 5 === 0) {
+            await new Promise(r => setTimeout(r, 10));
+          }
+        }
+
+        // 2. Send FILE_END
+        window.OmniDropSupabase.sendToPeer(targetPeer.id, {
+          type: 'FILE_END',
+          transferId,
+          fromId: myInfo.id || myClientId,
+          fileIndex: i
+        });
+      }
+
+      // 3. Send TRANSFER_COMPLETE
+      window.OmniDropSupabase.sendToPeer(targetPeer.id, {
+        type: 'TRANSFER_COMPLETE',
+        transferId,
+        fromId: myInfo.id || myClientId
+      });
+
+      playChime('success');
+      showToast(`🎉 Sent ${files.length} file(s) successfully!`);
+      setTimeout(() => {
+        progressModal.style.display = 'none';
+        activeWebRTCOutgoing = null;
+      }, 1200);
+
+    } catch (err) {
+      console.error('Supabase transfer error:', err);
+      showToast(`⚠️ Transfer error: ${err.message}`);
+      progressModal.style.display = 'none';
+      activeWebRTCOutgoing = null;
+    } finally {
+      releaseTransferWakeLock();
     }
   }
 
@@ -3203,6 +3389,20 @@
     // 2. Cloud Serverless Mode (Vercel): Instant PIN pairing via Supabase Realtime
     if (window.OmniDropSupabase) {
       window.OmniDropSupabase.joinRoom(cleanPin);
+
+      const pairPromise = new Promise(resolve => {
+        const timeout = setTimeout(() => {
+          pendingPairResolvers.delete(cleanPin);
+          resolve(null);
+        }, 4500);
+
+        pendingPairResolvers.set(cleanPin, (peer) => {
+          clearTimeout(timeout);
+          pendingPairResolvers.delete(cleanPin);
+          resolve(peer);
+        });
+      });
+
       window.OmniDropSupabase.sendToRoom(cleanPin, {
         type: 'PAIR_REQUEST',
         sender: {
@@ -3210,9 +3410,28 @@
           name: myInfo.name,
           os: myInfo.os,
           deviceType: myInfo.deviceType,
-          pin: myInfo.pin
+          pin: myInfo.pin,
+          ip: myInfo.ip
         }
       });
+
+      const matchedPeer = await pairPromise;
+      if (matchedPeer) {
+        matchedPeer.isWebRTC = true;
+        matchedPeer.isRemote = true;
+        matchedPeer.pin = cleanPin;
+        peersMap.set(matchedPeer.id, matchedPeer);
+        peersMap.set('pin_' + cleanPin, matchedPeer);
+        renderRadarPeers();
+
+        const modalPinPair = document.getElementById('modal-pin-pair');
+        if (modalPinPair) modalPinPair.style.display = 'none';
+        const qrModal = document.getElementById('modal-qr');
+        if (qrModal) qrModal.style.display = 'none';
+
+        createWebRTCPeerConnection(matchedPeer.id, matchedPeer, cleanPin, true);
+        return true;
+      }
     }
 
     // Secondary: Try PeerJS broker if available

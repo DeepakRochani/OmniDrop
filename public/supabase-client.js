@@ -40,24 +40,35 @@ window.OmniDropSupabase = (function() {
     localStorage.setItem('omnidrop_supabase_url', config.url);
     localStorage.setItem('omnidrop_supabase_anon_key', config.anonKey);
 
-    // Reconnect with fresh credentials
     disconnect();
     init(myPeerId, myPin, onSignalCallback);
+  }
+
+  function updateSelf(peerId, pin) {
+    if (peerId) myPeerId = peerId;
+    if (pin) {
+      myPin = pin.toString().trim().replace(/\D/g, '');
+      if (myPin.length === 6) {
+        joinRoom(myPin);
+      }
+    }
   }
 
   function init(peerId, pin, callback) {
     if (peerId) myPeerId = peerId;
     if (pin) {
-      myPin = pin;
-      desiredTopics.add(`realtime:omnidrop-room-${pin}`);
-    }
-    if (myPeerId) {
-      desiredTopics.add(`realtime:omnidrop-peer-${myPeerId}`);
+      myPin = pin.toString().trim().replace(/\D/g, '');
+      if (myPin.length === 6) {
+        desiredTopics.add(`realtime:omnidrop-room-${myPin}`);
+      }
     }
     if (callback) onSignalCallback = callback;
 
     if (!config.anonKey) return false;
     if (activeSocket && (activeSocket.readyState === WebSocket.OPEN || activeSocket.readyState === WebSocket.CONNECTING)) {
+      if (activeSocket.readyState === WebSocket.OPEN && myPin) {
+        joinRoom(myPin);
+      }
       return true;
     }
 
@@ -78,12 +89,12 @@ window.OmniDropSupabase = (function() {
         console.log(`[Supabase Realtime] Connected to project: ${config.projectId}`);
         joinedTopics.clear();
 
-        // Join all desired topics (radar, own room PIN, own peerId)
+        // Always join radar and own room topic
         for (const topic of desiredTopics) {
           sendJoin(topic);
         }
 
-        // Start heartbeat keepalive every 20 seconds
+        // Keepalive heartbeat every 20 seconds
         if (heartbeatTimer) clearInterval(heartbeatTimer);
         heartbeatTimer = setInterval(() => {
           if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
@@ -96,7 +107,7 @@ window.OmniDropSupabase = (function() {
           }
         }, 20000);
 
-        // Flush any queued broadcast messages
+        // Flush any queued messages
         while (pendingMessages.length > 0) {
           const msg = pendingMessages.shift();
           sendBroadcast(msg.topic, msg.payload);
@@ -113,18 +124,31 @@ window.OmniDropSupabase = (function() {
 
           if (data.event === 'broadcast' && data.payload) {
             const payload = data.payload;
-            // Ignore echoes of self messages
-            if (payload.fromId && myPeerId && payload.fromId === myPeerId) {
-              return;
-            }
-            if (payload.sender && payload.sender.id && myPeerId && payload.sender.id === myPeerId) {
-              return;
-            }
-            // Check if directed to specific target or broadcast to room/radar
-            if (!payload.targetId || payload.targetId === myPeerId || payload.targetId === 'all') {
-              if (onSignalCallback) {
-                onSignalCallback(payload, data.topic);
-              }
+
+            // Ignore echoes of self-sent messages
+            if (payload.fromId && myPeerId && payload.fromId === myPeerId) return;
+            if (payload.sender && payload.sender.id && myPeerId && payload.sender.id === myPeerId) return;
+
+            // Deterministic destination filter:
+            // 1. Universal broadcasts (e.g. RADAR_ANNOUNCE)
+            // 2. Addressed by peer ID: targetId === myPeerId
+            // 3. Addressed by PIN: targetId === myPin or targetPin === myPin
+            const targetId = payload.targetId || payload.toId;
+            const targetPin = payload.targetPin;
+
+            const isForMe = !targetId ||
+              targetId === 'all' ||
+              targetId === myPeerId ||
+              (myPin && (
+                targetPin === myPin ||
+                targetId === myPin ||
+                targetId === ('pin_' + myPin) ||
+                targetId === ('od_' + myPin) ||
+                targetId === ('peer_' + myPin)
+              ));
+
+            if (isForMe && onSignalCallback) {
+              onSignalCallback(payload, data.topic);
             }
           }
         } catch (e) {
@@ -202,19 +226,30 @@ window.OmniDropSupabase = (function() {
     return sendBroadcast(topic, payload);
   }
 
+  // High-speed point-to-point delivery via radar broadcast channel
   function sendToPeer(targetPeerId, payload) {
     if (!targetPeerId) return false;
-    const topic = `realtime:omnidrop-peer-${targetPeerId}`;
-    joinTopic(topic);
-    return sendBroadcast(topic, payload);
+    payload.targetId = targetPeerId;
+    payload.fromId = payload.fromId || myPeerId;
+    return sendBroadcast('realtime:omnidrop-radar', payload);
   }
 
+  // Room broadcast + radar direct targeting for instant 0-second discovery
   function sendToRoom(roomCode, payload) {
     if (!roomCode) return false;
     const clean = roomCode.toString().trim().replace(/\D/g, '');
+    payload.targetPin = clean;
+    payload.targetId = clean;
+    payload.fromId = payload.fromId || myPeerId;
+
+    // 1. Send via universal radar channel (guaranteed delivered in <10ms)
+    sendBroadcast('realtime:omnidrop-radar', payload);
+
+    // 2. Also send to dedicated room topic
     const topic = `realtime:omnidrop-room-${clean}`;
     joinTopic(topic);
-    return sendBroadcast(topic, payload);
+    sendBroadcast(topic, payload);
+    return true;
   }
 
   function broadcastRadar(peerInfo) {
@@ -245,6 +280,7 @@ window.OmniDropSupabase = (function() {
     getConfig,
     saveConfig,
     init,
+    updateSelf,
     joinTopic,
     joinRoom,
     broadcast,

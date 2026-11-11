@@ -275,21 +275,14 @@ module.exports = async (req, res) => {
       if (senderPeer) room.peers.set(sender.id, senderPeer);
     }
 
-    if (!target) {
-      target = {
-        name: `OmniDrop Peer (#${cleanPin})`,
-        id: 'peer_' + cleanPin,
-        pin: cleanPin,
-        peerId: 'od_' + cleanPin,
-        isWebRTC: true,
-        isRemote: true,
-        lastSeen: Date.now()
-      };
-      peersList = [target];
+    if (target) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, target, peer: target, peers: peersList, roomCode: cleanPin, method: 'webrtc' }));
+      return;
     }
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, target, peer: target, peers: peersList, roomCode: cleanPin, method: 'webrtc' }));
+    res.end(JSON.stringify({ ok: false, error: 'Peer not in local relay cache' }));
     return;
   }
 
