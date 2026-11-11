@@ -567,6 +567,34 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // 12b. Transfer Respond API (POST /api/transfer/respond)
+  if (req.method === 'POST' && (routeParam === 'transfer/respond' || fullPath.includes('transfer/respond'))) {
+    const data = await parseJsonBody(req).catch(() => ({}));
+    const { transferId, accepted, senderId } = data;
+    if (senderId) {
+      const queue = roomSignals.get(senderId) || [];
+      queue.push({
+        fromId: 'receiver',
+        signal: {
+          type: 'TRANSFER_RESPONSE',
+          transferId,
+          accepted: !!accepted
+        }
+      });
+      roomSignals.set(senderId, queue);
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, accepted: !!accepted }));
+    return;
+  }
+
+  // 12c. Transfer Upload API (POST /api/transfer/upload/*)
+  if (req.method === 'POST' && (routeParam?.startsWith('transfer/upload') || fullPath.includes('transfer/upload'))) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, bytesWritten: 0 }));
+    return;
+  }
+
   // 13. API 404 Fallback (never serve static files for /api/* requests)
   if (routeParam || url.pathname.startsWith('/api/') || (req.query && req.query.slug)) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
