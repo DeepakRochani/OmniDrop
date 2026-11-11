@@ -20,7 +20,8 @@ const MIME_TYPES = {
   '.webmanifest': 'application/manifest+json',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg'
+  '.ogg': 'audio/ogg',
+  '.txt': 'text/plain; charset=UTF-8'
 };
 
 // Helper: reliably obtain client public IP
