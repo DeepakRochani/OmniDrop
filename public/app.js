@@ -1359,6 +1359,9 @@
   }
 
   async function fetchPeers() {
+    // In cloud serverless (Vercel), peers and presence are managed by Supabase Realtime broadcast channels.
+    // Polling stateless serverless lambda would return [] and repeatedly wipe discovered peers from the radar.
+    if (isCloudServerlessEnv()) return;
     try {
       const res = await fetch('/api/peers?clientId=' + encodeURIComponent(myInfo.id || myClientId));
       const list = await res.json();
@@ -1656,8 +1659,49 @@
           <span class="peer-sub">${expectedSub}</span>
         `;
 
-        // Click to send files or text
+        // Instant touch handling for mobile (0ms response, zero lag, haptic feedback)
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchMoved = false;
+        let lastTouchTime = 0;
+
+        node.addEventListener('touchstart', (e) => {
+          if (!e.touches[0]) return;
+          const t = e.touches[0];
+          touchStartX = t.clientX;
+          touchStartY = t.clientY;
+          touchMoved = false;
+          node.classList.add('peer-touch-active');
+          try { triggerHaptic('light'); } catch (err) {}
+        }, { passive: true });
+
+        node.addEventListener('touchmove', (e) => {
+          if (!e.touches[0]) return;
+          const t = e.touches[0];
+          if (Math.hypot(t.clientX - touchStartX, t.clientY - touchStartY) > 10) {
+            touchMoved = true;
+            node.classList.remove('peer-touch-active');
+          }
+        }, { passive: true });
+
+        node.addEventListener('touchend', (e) => {
+          node.classList.remove('peer-touch-active');
+          if (!touchMoved) {
+            lastTouchTime = Date.now();
+            currentTargetPeer = peer;
+            if (pendingShareFiles && pendingShareFiles.length > 0) {
+              const files = pendingShareFiles;
+              pendingShareFiles = null;
+              initiateSendFiles(peer, files);
+              return;
+            }
+            triggerFilePickerForPeer(peer);
+          }
+        });
+
+        // Click to send files or text (desktop mouse support with touch debounce)
         node.addEventListener('click', () => {
+          if (Date.now() - lastTouchTime < 500) return;
           currentTargetPeer = peer;
           if (pendingShareFiles && pendingShareFiles.length > 0) {
             const files = pendingShareFiles;
@@ -3033,6 +3077,8 @@
   function startRoomPolling() {
     if (roomPollingTimer) return;
     roomPollingTimer = setInterval(async () => {
+      // If Supabase Realtime is actively connected, all signals stream in 0ms via WebSocket; skip HTTP polling
+      if (window.OmniDropSupabase && window.OmniDropSupabase.isConnected()) return;
       try {
         const myId = myInfo.id || myClientId;
         if (!myId) return;
@@ -4127,7 +4173,41 @@
   }
 
   if (btnSettings) btnSettings.addEventListener('click', openSettingsModal);
-  if (selfNode) selfNode.addEventListener('click', openSettingsModal);
+  if (selfNode) {
+    let selfTouchStartX = 0;
+    let selfTouchStartY = 0;
+    let selfTouchMoved = false;
+    let selfLastTouchTime = 0;
+
+    selfNode.addEventListener('touchstart', (e) => {
+      if (!e.touches[0]) return;
+      const t = e.touches[0];
+      selfTouchStartX = t.clientX;
+      selfTouchStartY = t.clientY;
+      selfTouchMoved = false;
+      try { triggerHaptic('light'); } catch (err) {}
+    }, { passive: true });
+
+    selfNode.addEventListener('touchmove', (e) => {
+      if (!e.touches[0]) return;
+      const t = e.touches[0];
+      if (Math.hypot(t.clientX - selfTouchStartX, t.clientY - selfTouchStartY) > 10) {
+        selfTouchMoved = true;
+      }
+    }, { passive: true });
+
+    selfNode.addEventListener('touchend', () => {
+      if (!selfTouchMoved) {
+        selfLastTouchTime = Date.now();
+        openSettingsModal();
+      }
+    });
+
+    selfNode.addEventListener('click', () => {
+      if (Date.now() - selfLastTouchTime < 500) return;
+      openSettingsModal();
+    });
+  }
 
   // Save Device Name
   if (btnSaveDeviceName && inputDeviceName) {

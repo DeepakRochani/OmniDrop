@@ -23,15 +23,110 @@
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+  height: 100%;
+}
+
 body {
   background-color: var(--bg-primary);
   color: var(--text-main);
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
   position: relative;
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+  -webkit-overflow-scrolling: touch;
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
   user-select: none;
+}
+
+/* Ensure smooth touch action and no double-tap 300ms zoom delay */
+button, a, input, select, textarea,
+.peer-node, .node-self, .action-btn, .primary-btn, .secondary-btn,
+.radar-wrapper, .modal-card, .modal-backdrop, .brand, .code-go-btn,
+.picker-device-item, .modal-tab, .chime-btn, .haptic-btn, .history-item,
+.modal-close, .toast-btn, .setting-item {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Allow text selection in editable fields */
+input, textarea {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+/* Hardware Acceleration & GPU compositing for silky smooth 60fps/120fps display */
+.radar-wrapper,
+.radar-scan,
+.radar-ring,
+.node-self,
+.peer-node,
+.ambient-glow {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.radar-scan {
+  will-change: transform;
+}
+
+.radar-ring {
+  will-change: transform, opacity;
+}
+
+/* Instant Tactile Feedback on Mobile Touch */
+.primary-btn:active,
+.secondary-btn:active,
+.action-btn:active,
+.code-go-btn:active,
+.picker-device-item:active,
+.modal-tab:active,
+.chime-btn:active,
+.haptic-btn:active,
+.toast-btn:active {
+  transform: scale(0.95) !important;
+  filter: brightness(1.2) !important;
+  transition: transform 0.05s ease, filter 0.05s ease !important;
+}
+
+.node-self:active .node-avatar {
+  transform: scale(0.93);
+  box-shadow: 0 0 35px var(--accent-cyan);
+  transition: transform 0.05s ease;
+}
+
+.peer-node:active,
+.peer-node.peer-touch-active {
+  transform: translate(-50%, -50%) scale(0.92) !important;
+  transition: transform 0.05s ease !important;
+}
+
+.peer-node:active .peer-avatar,
+.peer-node.peer-touch-active .peer-avatar {
+  border-color: #67e8f9 !important;
+  box-shadow: 0 0 25px var(--accent-cyan) !important;
+  background: rgba(14, 165, 233, 0.25) !important;
+}
+
+/* Scrollable lists inside modals have fluid momentum touch scroll */
+.modal-card,
+.modal-body,
+.devices-picker-list,
+.snippets-list,
+.history-list {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Ambient dynamic backdrops */
@@ -1157,6 +1252,26 @@ body {
     min-height: 100vh;
     min-height: 100dvh;
     overflow-x: hidden;
+  }
+
+  /* Reduce heavy blur pass on mobile GPUs to ensure silky smooth 60fps/120fps display */
+  .ambient-glow {
+    filter: blur(45px) !important;
+    opacity: 0.2 !important;
+    pointer-events: none !important;
+    will-change: transform;
+  }
+  .glow-1 {
+    width: 240px !important;
+    height: 240px !important;
+    top: -50px !important;
+    left: -50px !important;
+  }
+  .glow-2 {
+    width: 260px !important;
+    height: 260px !important;
+    bottom: -80px !important;
+    right: -50px !important;
   }
 
   .app-header {
