@@ -2776,6 +2776,11 @@
         });
     } else {
       currentWebRTCReceiving.fileBlobParts.push(chunk);
+      // Periodically compact small ArrayBuffer chunks into a Blob to minimize mobile JS heap overhead
+      if (currentWebRTCReceiving.fileBlobParts.length >= 64) {
+        const compacted = new Blob(currentWebRTCReceiving.fileBlobParts, { type: 'application/octet-stream' });
+        currentWebRTCReceiving.fileBlobParts = [compacted];
+      }
     }
 
     currentWebRTCReceiving.receivedFileBytes += chunk.byteLength;
