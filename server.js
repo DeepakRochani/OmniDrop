@@ -1030,7 +1030,7 @@ function handleRequest(req, res) {
     }
 
     const savePath = getSafeUniquePath(DOWNLOADS_DIR, fileMeta.name);
-    const writeStream = fs.createWriteStream(savePath);
+    const writeStream = fs.createWriteStream(savePath, { highWaterMark: 4 * 1024 * 1024 });
     const hash = crypto.createHash('sha256');
 
     let fileReceivedBytes = 0;
@@ -1163,7 +1163,7 @@ function handleRequest(req, res) {
         'Content-Length': stat.size,
         'Cache-Control': 'no-cache'
       });
-      fs.createReadStream(safePath).pipe(res);
+      fs.createReadStream(safePath, { highWaterMark: 4 * 1024 * 1024 }).pipe(res);
     } catch (err) {
       console.error('[Download error]:', err.message);
       if (!res.headersSent) {

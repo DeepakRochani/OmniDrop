@@ -24,6 +24,7 @@
   let currentTargetPeer = null;
   let eventSource = null;
   const completedTransfers = new Set();
+  const sessionReceivedFiles = [];
 
   // --- Sound & Haptics Preferences (Saved in LocalStorage) ---
   const settings = {
@@ -468,6 +469,13 @@
     return true; // True only for public cloud serverless instances (e.g. omni-drop-iota.vercel.app)
   }
 
+  // True only when running on the host machine itself (localhost / Electron desktop app)
+  function isHostBrowser() {
+    if (window.electronAPI) return true;
+    const host = window.location.hostname;
+    return host === 'localhost' || host === '127.0.0.1';
+  }
+
   // --- Worldwide WebRTC P2P Configuration & State ---
   const RTC_CONFIG = {
     iceServers: [
@@ -521,10 +529,15 @@
         (myInfo.localLanIp && p.localLanIp && isIpMatch(myInfo.localLanIp, p.localLanIp));
 
       if (sameNet) {
+        const existingLocal = peersMap.get(p.id);
+        if (!isCloudServerlessEnv() && existingLocal && !existingLocal.isWebRTC) {
+          existingLocal.lastSeen = Date.now();
+          return;
+        }
         p.isWebRTC = true;
         p.isRemote = true;
         p.lastSeen = Date.now();
-        const isNew = !peersMap.has(p.id);
+        const isNew = !existingLocal;
         peersMap.set(p.id, p);
         if (p.pin) peersMap.set('pin_' + p.pin, p);
         renderRadarPeers();
@@ -552,6 +565,11 @@
     if (payload.type === 'RADAR_REPLY' && payload.peer) {
       const p = payload.peer;
       if (p.id === (myInfo.id || myClientId)) return;
+      const existingLocal = peersMap.get(p.id);
+      if (!isCloudServerlessEnv() && existingLocal && !existingLocal.isWebRTC) {
+        existingLocal.lastSeen = Date.now();
+        return;
+      }
       p.isWebRTC = true;
       p.isRemote = true;
       p.lastSeen = Date.now();
@@ -879,6 +897,14 @@
       handleWebRTCBinaryChunk(data);
       return;
     }
+    if (ArrayBuffer.isView(data)) {
+      handleWebRTCBinaryChunk(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+      return;
+    }
+    if (data instanceof Blob) {
+      data.arrayBuffer().then(buf => handleWebRTCBinaryChunk(buf)).catch(() => {});
+      return;
+    }
 
     let msg = data;
     if (typeof data === 'string') {
@@ -1066,7 +1092,7 @@
 
   // Persistent registration with host (preserves device identity, name and PIN across screen locks)
   async function registerWithHost() {
-    if (!isCloudServerlessEnv()) return;
+    if (isHostBrowser()) return;
 
     try {
       const { clientOS, clientType } = detectClientDevice();
@@ -1163,7 +1189,7 @@
           if (data.ip) {
             myInfo.ip = data.ip;
           }
-          if (!isRemoteClient) {
+          if (isHostBrowser() && !isRemoteClient) {
             myInfo = Object.assign({}, myInfo, data);
             if (data.pin) myInfo.pin = data.pin;
           } else {
@@ -1211,9 +1237,11 @@
       }, 8000);
     }
 
-    // On remote/cloud clients (Vercel): register with host/relay and activate WebRTC room
-    if (isRemoteClient) {
+    // On non-host clients (LAN mobile/tablet or Vercel cloud): register with host/relay with own unique client ID
+    if (!isHostBrowser() || isRemoteClient) {
       await registerWithHost();
+    }
+    if (isRemoteClient) {
       createRemoteRoom();
       startRoomPolling();
     }
@@ -1990,6 +2018,8 @@
         fileBlobParts: [],
         receivedBlobs: [],
         fileStream: fileStream,
+        fileStreamWritePromise: Promise.resolve(),
+        fileStreamClosingPromise: null,
         startTime: Date.now()
       };
 
@@ -2102,6 +2132,107 @@
     }
   }
 
+  function updateReceivedFilesBadge() {
+    const badge = document.getElementById('received-files-badge');
+    if (!badge) return;
+    if (sessionReceivedFiles.length > 0) {
+      badge.textContent = sessionReceivedFiles.length > 99 ? '99+' : String(sessionReceivedFiles.length);
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  function recordReceivedFiles(files, senderName) {
+    if (!Array.isArray(files) || files.length === 0) return;
+    files.forEach(file => {
+      const name = file.originalName || file.name || file.fileName || 'file';
+      const url = file.downloadUrl || (file.blob ? URL.createObjectURL(file.blob) : (!file.directSaved ? `/api/download/${encodeURIComponent(file.name || name)}` : null));
+      if (url && !file.downloadUrl) file.downloadUrl = url;
+      sessionReceivedFiles.unshift({
+        name,
+        size: file.size || 0,
+        downloadUrl: url,
+        blob: file.blob || null,
+        directSaved: !!file.directSaved,
+        sender: file.sender || senderName || 'Peer',
+        receivedAt: file.receivedAt || Date.now()
+      });
+    });
+    if (sessionReceivedFiles.length > 50) sessionReceivedFiles.length = 50;
+    updateReceivedFilesBadge();
+  }
+
+  async function renderReceivedFilesModal() {
+    const listEl = document.getElementById('received-files-list');
+    if (!listEl) return;
+
+    let allFiles = [...sessionReceivedFiles];
+    if (!isCloudServerlessEnv()) {
+      try {
+        const res = await fetch('/api/received');
+        if (res.ok) {
+          const serverFiles = await res.json();
+          if (Array.isArray(serverFiles)) {
+            const existingKeys = new Set(allFiles.map(f => `${f.name}:${f.size}:${f.downloadUrl || ''}`));
+            serverFiles.forEach(sf => {
+              const name = sf.originalName || sf.name || 'file';
+              const key = `${name}:${sf.size || 0}:${sf.downloadUrl || ''}`;
+              if (!existingKeys.has(key)) {
+                allFiles.push({
+                  name,
+                  size: sf.size || 0,
+                  downloadUrl: sf.downloadUrl || `/api/download/${encodeURIComponent(sf.name || name)}`,
+                  blob: null,
+                  directSaved: false,
+                  sender: sf.sender || 'Nearby Peer',
+                  receivedAt: sf.receivedAt || Date.now()
+                });
+              }
+            });
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (allFiles.length === 0) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;text-align:center;">No files received yet.</div>';
+      return;
+    }
+
+    listEl.innerHTML = '';
+    allFiles.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'incoming-file-row';
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);';
+
+      const info = document.createElement('div');
+      info.style.cssText = 'min-width:0;flex:1;text-align:left;';
+      const nameDiv = document.createElement('div');
+      nameDiv.style.cssText = 'font-weight:600;font-size:13px;word-break:break-all;';
+      nameDiv.textContent = item.name;
+      const metaDiv = document.createElement('div');
+      metaDiv.style.cssText = 'font-size:11px;color:var(--text-muted);margin-top:2px;';
+      metaDiv.textContent = `${formatBytes(item.size)} • ${item.sender || 'Peer'}${item.directSaved ? ' • Saved to disk' : ''}`;
+      info.appendChild(nameDiv);
+      info.appendChild(metaDiv);
+      row.appendChild(info);
+
+      if (item.downloadUrl) {
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'code-go-btn';
+        dlBtn.style.cssText = 'flex-shrink:0;padding:6px 12px;font-size:12px;';
+        dlBtn.textContent = 'Save';
+        dlBtn.addEventListener('click', () => {
+          triggerAutoDownload(item.downloadUrl, item.name);
+        });
+        row.appendChild(dlBtn);
+      }
+
+      listEl.appendChild(row);
+    });
+  }
+
   function handleIncomingFilesComplete(comp) {
     if (!comp || !comp.transferId) return;
     if (completedTransfers.has(comp.transferId)) return;
@@ -2115,63 +2246,105 @@
       ? comp.savedFiles
       : (comp.lastFile ? [comp.lastFile] : (comp.downloadUrl ? [comp] : []));
 
+    recordReceivedFiles(files, comp.sender);
+
     const totalCount = files.length || comp.totalFiles || 1;
-    const displayName = files[0] ? (files[0].originalName || files[0].name || comp.fileName) : 'file';
+    const totalBytes = files.reduce((sum, f) => sum + (f.size || 0), 0) || comp.totalSize || 0;
+    const displayName = totalCount > 1
+      ? `${files[0]?.originalName || files[0]?.name || comp.fileName || 'file'} (+${totalCount - 1} more)`
+      : (files[0] ? (files[0].originalName || files[0].name || comp.fileName || 'file') : 'file');
 
-    const ua = navigator.userAgent || '';
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const allDirectSaved = files.length > 0 && files.every(f => f.directSaved);
+    const shouldShowReadyModal = !allDirectSaved;
 
-    if (isMobile) {
+    if (shouldShowReadyModal) {
       showToast(`🎉 Received ${displayName}! Tap Save File to save.`, 5000);
 
-      // Display the File Ready modal with a clear tap-to-save button for iOS / Android
+      // Display the File Ready modal with a clear tap-to-save button
       const readyModal = document.getElementById('modal-file-ready');
       if (readyModal) {
         const nameEl = document.getElementById('file-ready-name');
         if (nameEl) nameEl.textContent = displayName;
         const sizeEl = document.getElementById('file-ready-size');
-        if (sizeEl) sizeEl.textContent = formatBytes(files[0]?.size || comp.totalSize || 0);
+        if (sizeEl) sizeEl.textContent = formatBytes(totalBytes);
 
         const saveBtn = document.getElementById('file-ready-download-link');
         if (saveBtn) {
-          const firstUrl = files[0]?.downloadUrl || `/api/download/${encodeURIComponent(displayName)}`;
+          const singleName = files[0] ? (files[0].originalName || files[0].name || files[0].fileName || displayName) : displayName;
+          const firstUrl = files[0]?.downloadUrl || `/api/download/${encodeURIComponent(singleName)}`;
           saveBtn.href = firstUrl;
-          saveBtn.download = displayName;
+          saveBtn.download = singleName;
 
-          // Wire up Native Share Sheet for iPhone / Android touch gesture
-          saveBtn.onclick = async (e) => {
-            if (files[0]?.blob && navigator.canShare) {
+          // Wire up Native Share Sheet when supported, with synchronous native anchor fallback for .zip and archives
+          saveBtn.onclick = (e) => {
+            if (files.length === 1 && files[0]?.blob && navigator.canShare) {
               try {
-                const fileObj = new File([files[0].blob], displayName, { type: files[0].blob.type || 'application/octet-stream' });
+                const shareType = files[0].mimeType || files[0].blob.type || 'application/octet-stream';
+                const fileObj = new File([files[0].blob], singleName, { type: shareType });
                 if (navigator.canShare({ files: [fileObj] })) {
                   e.preventDefault();
-                  await navigator.share({
+                  navigator.share({
                     files: [fileObj],
-                    title: displayName
+                    title: singleName
+                  }).then(() => {
+                    setTimeout(() => { readyModal.style.display = 'none'; }, 600);
+                  }).catch((err) => {
+                    if (err && err.name === 'AbortError') return;
+                    console.warn('Native share notice, falling back to direct download:', err);
+                    triggerAutoDownload(firstUrl, singleName);
+                    setTimeout(() => { readyModal.style.display = 'none'; }, 600);
                   });
-                  setTimeout(() => { readyModal.style.display = 'none'; }, 600);
                   return;
                 }
               } catch (err) {
-                console.warn('Native share notice:', err);
+                console.warn('Native share check failed, falling back to direct download:', err);
               }
             }
+
+            if (files.length <= 1) {
+              // Let the native <a href="..." download="..."> gesture execute synchronously
+              setTimeout(() => { readyModal.style.display = 'none'; }, 600);
+              return;
+            }
+
+            e.preventDefault();
+            files.forEach((file, index) => {
+              if (file.directSaved) return;
+              const name = file.originalName || file.name || file.fileName || 'download';
+              const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || name)}`;
+              if (index === 0) {
+                triggerAutoDownload(url, name);
+              } else {
+                setTimeout(() => {
+                  triggerAutoDownload(url, name);
+                }, index * 250);
+              }
+            });
+            setTimeout(() => { readyModal.style.display = 'none'; }, 600);
           };
         }
 
         readyModal.style.display = 'flex';
       }
 
-      // Also attempt background download
-      files.forEach((file, index) => {
-        if (file.directSaved || file.downloaded) return;
-        file.downloaded = true;
-        setTimeout(() => {
-          const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || file.fileName)}`;
-          const name = file.name || file.fileName;
-          triggerAutoDownload(url, name);
-        }, index * 300);
-      });
+      // Only auto-trigger background download on Desktop; on Mobile, background blob/anchor clicks
+      // can navigate the tab (white screen) and reset the app, so let the user tap Save File.
+      const ua = navigator.userAgent || '';
+      const isMobileDevice = /Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(ua)
+        || (navigator.maxTouchPoints > 0 && /Linux|MacIntel/i.test(navigator.platform || ''))
+        || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+
+      if (settings.autoDownload && !isMobileDevice) {
+        files.forEach((file, index) => {
+          if (file.directSaved || file.downloaded) return;
+          file.downloaded = true;
+          setTimeout(() => {
+            const name = file.originalName || file.name || file.fileName || 'download';
+            const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || name)}`;
+            triggerAutoDownload(url, name);
+          }, index * 300);
+        });
+      }
 
     } else {
       // Desktop (Mac / PC): Zero-click automatic save to Downloads folder
@@ -2182,8 +2355,8 @@
         if (file.directSaved || file.downloaded) return;
         file.downloaded = true;
         setTimeout(() => {
-          const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || file.fileName)}`;
-          const name = file.name || file.fileName;
+          const name = file.originalName || file.name || file.fileName || 'download';
+          const url = file.downloadUrl || `/api/download/${encodeURIComponent(file.name || name)}`;
           triggerAutoDownload(url, name);
         }, index * 300);
       });
@@ -2193,11 +2366,14 @@
   function onTransferComplete(comp) {
     document.getElementById('modal-progress').style.display = 'none';
 
-    const isSender = (activeOutgoingTransfer && activeOutgoingTransfer.transferId === comp.transferId)
-      || (comp.senderId && comp.senderId === (myInfo.id || myClientId));
-
+    const myId = myInfo.id || myClientId;
     const isReceiver = (activeIncomingTransfer && activeIncomingTransfer.transferId === comp.transferId)
-      || (comp.targetId && (comp.targetId === myInfo.id || comp.targetId === myClientId));
+      || (comp.targetId && (comp.targetId === myId || comp.targetId === myClientId));
+
+    const isSender = !isReceiver && (
+      (activeOutgoingTransfer && activeOutgoingTransfer.transferId === comp.transferId)
+      || (comp.senderId && (comp.senderId === myId || comp.senderId === myClientId))
+    );
 
     if (isReceiver || (!isSender && activeIncomingTransfer)) {
       activeIncomingTransfer = null;
@@ -2451,6 +2627,10 @@
       }
     } else if (data instanceof ArrayBuffer) {
       handleWebRTCBinaryChunk(data);
+    } else if (ArrayBuffer.isView(data)) {
+      handleWebRTCBinaryChunk(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+    } else if (data instanceof Blob) {
+      data.arrayBuffer().then(buf => handleWebRTCBinaryChunk(buf)).catch(() => {});
     }
   }
 
@@ -2502,28 +2682,11 @@
       case 'FILE_END':
         // Receiver finished receiving chunks for a single file
         if (currentWebRTCReceiving) {
-          if (currentWebRTCReceiving.fileStream) {
-            currentWebRTCReceiving.fileStream.close().catch(() => {});
-            currentWebRTCReceiving.fileStream = null;
-            const savedItem = {
-              name: currentWebRTCReceiving.currentFileName,
-              size: currentWebRTCReceiving.currentFileSize,
-              directSaved: true
-            };
-            currentWebRTCReceiving.receivedBlobs.push(savedItem);
-            showToast(`✅ Saved ${currentWebRTCReceiving.currentFileName} directly to chosen folder!`);
-          } else {
-            const blob = new Blob(currentWebRTCReceiving.fileBlobParts, { type: currentWebRTCReceiving.currentFileType });
-            const blobUrl = URL.createObjectURL(blob);
-            const savedItem = {
-              name: currentWebRTCReceiving.currentFileName,
-              blob: blob,
-              downloadUrl: blobUrl,
-              size: currentWebRTCReceiving.currentFileSize
-            };
-            currentWebRTCReceiving.receivedBlobs.push(savedItem);
-            currentWebRTCReceiving.fileBlobParts = [];
+          if (currentWebRTCReceiving.autoFinalizeTimer) {
+            clearTimeout(currentWebRTCReceiving.autoFinalizeTimer);
+            currentWebRTCReceiving.autoFinalizeTimer = null;
           }
+          finalizeCurrentWebRTCFile(currentWebRTCReceiving);
         }
         break;
 
@@ -2531,14 +2694,7 @@
         // Entire transfer finished
         releaseTransferWakeLock();
         if (currentWebRTCReceiving) {
-          const finished = currentWebRTCReceiving;
-          currentWebRTCReceiving = null;
-          handleIncomingFilesComplete({
-            transferId: finished.transferId,
-            senderId: targetId,
-            totalFiles: finished.totalFiles,
-            savedFiles: finished.receivedBlobs
-          });
+          completeWebRTCReceiving(currentWebRTCReceiving, targetId);
         }
         break;
 
@@ -2549,16 +2705,75 @@
     }
   }
 
+  // Finalize a single WebRTC received file into receivedBlobs (or close direct disk stream)
+  function finalizeCurrentWebRTCFile(receiving) {
+    if (!receiving) return;
+    if (receiving.fileStream) {
+      const streamToClose = receiving.fileStream;
+      const pendingWrite = receiving.fileStreamWritePromise || Promise.resolve();
+      receiving.fileStream = null;
+      receiving.fileStreamClosingPromise = pendingWrite
+        .then(() => streamToClose.close())
+        .catch(() => {});
+      receiving.receivedBlobs.push({
+        name: receiving.currentFileName,
+        size: receiving.currentFileSize,
+        directSaved: true
+      });
+      showToast(`✅ Saved ${receiving.currentFileName} directly to chosen folder!`);
+    } else if (receiving.fileBlobParts && receiving.fileBlobParts.length > 0) {
+      const blob = new Blob(receiving.fileBlobParts, { type: 'application/octet-stream' });
+      const blobUrl = URL.createObjectURL(blob);
+      receiving.receivedBlobs.push({
+        name: receiving.currentFileName,
+        mimeType: receiving.currentFileType,
+        blob: blob,
+        downloadUrl: blobUrl,
+        size: receiving.currentFileSize
+      });
+      receiving.fileBlobParts = [];
+    }
+  }
+
+  // Finalize an entire WebRTC transfer and trigger UI completion
+  function completeWebRTCReceiving(receiving, senderId) {
+    if (!receiving) return;
+    if (receiving.autoFinalizeTimer) {
+      clearTimeout(receiving.autoFinalizeTimer);
+      receiving.autoFinalizeTimer = null;
+    }
+    if (currentWebRTCReceiving === receiving) {
+      currentWebRTCReceiving = null;
+    }
+    finalizeCurrentWebRTCFile(receiving);
+    const finalize = () => {
+      handleIncomingFilesComplete({
+        transferId: receiving.transferId,
+        senderId: senderId || receiving.sender?.id,
+        sender: receiving.sender?.name,
+        totalFiles: receiving.totalFiles,
+        savedFiles: receiving.receivedBlobs
+      });
+    };
+    if (receiving.fileStreamClosingPromise) {
+      receiving.fileStreamClosingPromise.finally(finalize);
+    } else {
+      finalize();
+    }
+  }
+
   // Handle WebRTC binary chunk on receiver side
   function handleWebRTCBinaryChunk(chunk) {
     if (!currentWebRTCReceiving) return;
 
     if (currentWebRTCReceiving.fileStream) {
-      try {
-        currentWebRTCReceiving.fileStream.write(chunk);
-      } catch (e) {
-        currentWebRTCReceiving.fileBlobParts.push(chunk);
-      }
+      const targetStream = currentWebRTCReceiving.fileStream;
+      const targetReceiving = currentWebRTCReceiving;
+      targetReceiving.fileStreamWritePromise = (targetReceiving.fileStreamWritePromise || Promise.resolve())
+        .then(() => targetStream.write(chunk))
+        .catch(() => {
+          targetReceiving.fileBlobParts.push(chunk);
+        });
     } else {
       currentWebRTCReceiving.fileBlobParts.push(chunk);
     }
@@ -2588,6 +2803,17 @@
 
       currentWebRTCReceiving.lastSampleTime = now;
       currentWebRTCReceiving.lastSampleBytes = currentWebRTCReceiving.totalReceivedBytes;
+    }
+
+    // Safety fallback: if 100% of bytes arrived but TRANSFER_COMPLETE control frame was delayed/dropped, finalize after 1.5s
+    if (currentWebRTCReceiving.totalSize > 0 && currentWebRTCReceiving.totalReceivedBytes >= currentWebRTCReceiving.totalSize && !currentWebRTCReceiving.autoFinalizeTimer) {
+      const targetReceiving = currentWebRTCReceiving;
+      targetReceiving.autoFinalizeTimer = setTimeout(() => {
+        if (currentWebRTCReceiving === targetReceiving) {
+          releaseTransferWakeLock();
+          completeWebRTCReceiving(targetReceiving, targetReceiving.sender?.id);
+        }
+      }, 1500);
     }
   }
 
@@ -2680,7 +2906,7 @@
     document.getElementById('progress-title').textContent = 'Streaming Files...';
     document.getElementById('progress-target').textContent = `Transferring to ${targetPeer.name}`;
 
-    const chunkSize = 32 * 1024; // 32 KB per chunk
+    const chunkSize = 32 * 1024; // 32 KB per chunk (safe for Supabase Realtime broadcast limits)
     let grandBytesSent = 0;
     const startTime = Date.now();
     let lastSampleTime = startTime;
@@ -2715,12 +2941,11 @@
           const buffer = await slice.arrayBuffer();
           offset += buffer.byteLength;
 
-          // Convert ArrayBuffer to base64
+          // Fast ArrayBuffer -> base64 conversion
           let binary = '';
           const bytes = new Uint8Array(buffer);
-          const len = bytes.byteLength;
-          for (let b = 0; b < len; b++) {
-            binary += String.fromCharCode(bytes[b]);
+          for (let b = 0; b < bytes.byteLength; b += 8192) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(b, b + 8192));
           }
           const base64Chunk = btoa(binary);
 
@@ -2754,11 +2979,12 @@
             lastSampleBytes = grandBytesSent;
           }
 
-          if (chunkIndex % 5 === 0) {
-            await new Promise(r => setTimeout(r, 10));
+          if (chunkIndex % 4 === 0) {
+            await new Promise(r => setTimeout(r, 25));
           }
         }
 
+        await new Promise(r => setTimeout(r, 80));
         // 2. Send FILE_END
         window.OmniDropSupabase.sendToPeer(targetPeer.id, {
           type: 'FILE_END',
@@ -2799,12 +3025,19 @@
     document.getElementById('progress-title').textContent = 'Streaming Worldwide (P2P)...';
     document.getElementById('progress-target').textContent = `Direct WebRTC to ${targetPeer.name}`;
 
-    // Universal WebRTC safe chunk size (64 KB is guaranteed across iOS Safari, Android, and Desktop)
-    const currentChunkSize = 64 * 1024; // 64 KB universal WebRTC chunk size
-    const currentBufferThreshold = 4 * 1024 * 1024; // 4 MB backpressure threshold
+    // Adaptive WebRTC chunk size: use 128 KB only for desktop-to-desktop native RTCDataChannel when SCTP supports it, 64 KB universal safe fallback
+    const connEntry = webrtcConnections.get(targetPeer?.id);
+    const peerConn = connEntry?.pc;
+    const maxMsgSize = peerConn?.sctp?.maxMessageSize || 65536;
+    const isSenderSafariOrMobile = /iPhone|iPad|iPod|Safari/i.test(navigator.userAgent || '') && !/Chrome|CriOS|Android/i.test(navigator.userAgent || '');
+    const isTargetMobile = /ios|android/i.test(targetPeer?.os || '') || targetPeer?.deviceType === 'phone' || targetPeer?.deviceType === 'tablet';
+    const isNativeDc = typeof RTCDataChannel !== 'undefined' && (dc instanceof RTCDataChannel);
+    const currentChunkSize = (isNativeDc && !isSenderSafariOrMobile && !isTargetMobile && maxMsgSize >= 262144) ? (128 * 1024) : (64 * 1024);
+    const highWaterMark = 12 * 1024 * 1024; // 12 MB pipeline ceiling
+    const lowWaterMark = 4 * 1024 * 1024;   // 4 MB resume threshold (prevents per-chunk stalls)
     try {
       if ('bufferedAmountLowThreshold' in dc) {
-        dc.bufferedAmountLowThreshold = currentBufferThreshold;
+        dc.bufferedAmountLowThreshold = lowWaterMark;
       }
     } catch (e) {}
 
@@ -2842,8 +3075,8 @@
         while (offset < file.size) {
           if (outgoing.cancelRequested) break;
 
-          // Backpressure flow control: pause if internal buffer exceeds threshold
-          if (dc.bufferedAmount > currentBufferThreshold) {
+          // Backpressure flow control: pause if internal buffer exceeds high-water mark
+          if (dc.bufferedAmount > highWaterMark) {
             await new Promise(resolve => {
               let resolved = false;
               const finish = () => {
@@ -2855,10 +3088,10 @@
               };
               try { dc.onbufferedamountlow = finish; } catch (e) {}
               const checkInterval = setInterval(() => {
-                if (dc.bufferedAmount <= currentBufferThreshold) {
+                if (dc.bufferedAmount <= lowWaterMark) {
                   finish();
                 }
-              }, 40);
+              }, 5);
             });
           }
 
@@ -2909,6 +3142,20 @@
         type: 'TRANSFER_COMPLETE',
         transferId
       }));
+
+      // Wait for SCTP send buffer to drain so FILE_END & TRANSFER_COMPLETE actually reach the peer
+      if (typeof dc.bufferedAmount === 'number' && dc.bufferedAmount > 0) {
+        document.getElementById('progress-speed').textContent = 'Finalizing...';
+        await new Promise(resolve => {
+          const startedDrain = Date.now();
+          const drainTimer = setInterval(() => {
+            if (!dc.bufferedAmount || dc.bufferedAmount === 0 || dc.readyState === 'closed' || (Date.now() - startedDrain > 30000)) {
+              clearInterval(drainTimer);
+              resolve();
+            }
+          }, 25);
+        });
+      }
 
       playChime('success');
       showToast(`🎉 Sent ${files.length} file(s) across WebRTC P2P!`);
@@ -3167,6 +3414,7 @@
   setupDismissableModal('modal-text', 'btn-close-text');
   setupDismissableModal('modal-target-picker', 'btn-close-picker');
   setupDismissableModal('modal-file-ready', 'btn-close-file-ready');
+  setupDismissableModal('modal-received', 'btn-close-received');
   setupDismissableModal('modal-progress', 'btn-close-progress');
   setupDismissableModal('modal-settings', 'btn-close-settings');
   setupDismissableModal('modal-incoming', 'btn-close-incoming', () => {
@@ -3174,10 +3422,18 @@
     if (btnDecline) btnDecline.click();
   });
 
+  const btnReceivedFiles = document.getElementById('btn-received-files');
+  if (btnReceivedFiles) {
+    btnReceivedFiles.addEventListener('click', () => {
+      renderReceivedFilesModal();
+      document.getElementById('modal-received').style.display = 'flex';
+    });
+  }
+
   // Global Escape key dismiss for physical keyboards (Mac/PC/iPad)
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      ['modal-qr', 'modal-pin-pair', 'modal-text', 'modal-target-picker', 'modal-file-ready', 'modal-progress', 'modal-settings'].forEach(id => {
+      ['modal-qr', 'modal-pin-pair', 'modal-text', 'modal-target-picker', 'modal-file-ready', 'modal-received', 'modal-progress', 'modal-settings'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.style.display !== 'none') el.style.display = 'none';
       });
@@ -3397,14 +3653,6 @@
   if (btnFileReadyClose) {
     btnFileReadyClose.addEventListener('click', () => {
       document.getElementById('modal-file-ready').style.display = 'none';
-    });
-  }
-  const dlLink = document.getElementById('file-ready-download-link');
-  if (dlLink) {
-    dlLink.addEventListener('click', () => {
-      setTimeout(() => {
-        document.getElementById('modal-file-ready').style.display = 'none';
-      }, 600);
     });
   }
 

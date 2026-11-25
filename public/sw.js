@@ -1,12 +1,12 @@
-const CACHE_NAME = 'omnidrop-cache-v7';
+const CACHE_NAME = 'omnidrop-cache-v17';
 const ASSETS = [
   '/',
   '/index.html',
-  '/style.css',
-  '/app.js',
+  '/style.css?v=17',
+  '/app.js?v=17',
   '/qrcode.js',
   '/peerjs.min.js',
-  '/supabase-client.js',
+  '/supabase-client.js?v=17',
   '/ads.txt',
   '/manifest.json',
   '/icon.svg'
@@ -109,6 +109,22 @@ self.addEventListener('fetch', event => {
 
   // Never cache API endpoints
   if (url.pathname.startsWith('/api/')) {
+    return;
+  }
+
+  // Network-first for app shell so mobile/PWA always gets latest fixes, fallback to cache offline
+  if (event.request.method === 'GET' && url.origin === self.location.origin) {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy)).catch(() => {});
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
     return;
   }
 

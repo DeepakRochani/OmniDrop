@@ -11,7 +11,7 @@
   <meta name="google-adsense-account" content="ca-pub-7928165411445722" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icon.svg" />
-  <link rel="stylesheet" href="/style.css?v=7" />
+  <link rel="stylesheet" href="/style.css?v=17" />
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2338bdf8'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-5H8l4-4 4 4h-3v5h-2z'/></svg>" />
   <!-- Google AdSense -->
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7928165411445722"
@@ -63,6 +63,14 @@
         <span class="action-label">Connect</span>
       </button>
 
+
+      <button id="btn-received-files" class="action-btn glass" title="Received Files" style="position:relative;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+        <span class="action-label">Received</span>
+        <span id="received-files-badge" style="display:none;position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#10b981;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;">0</span>
+      </button>
 
       <button id="btn-settings" class="action-btn glass" title="Device Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -317,6 +325,24 @@
         <a id="file-ready-download-link" href="#" download class="primary-btn" style="text-decoration:none;display:flex;align-items:center;justify-content:center;">
           <span>Save File</span>
         </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Received Files History -->
+  <div class="modal-backdrop" id="modal-received" style="display:none;">
+    <div class="modal-card glass">
+      <div class="modal-header">
+        <h3>📥 Received Files</h3>
+        <button class="modal-close" id="btn-close-received" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Files received in this session or saved to your Downloads folder:</p>
+        <div id="received-files-list" style="max-height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin-top:12px;">
+          <div style="color:var(--text-muted);font-size:13px;padding:16px;text-align:center;">No files received yet.</div>
+        </div>
       </div>
     </div>
   </div>
@@ -641,8 +667,8 @@
 
   <script src="/qrcode.js"></script>
   <script src="/peerjs.min.js"></script>
-  <script src="/supabase-client.js?v=7"></script>
-  <script src="/app.js?v=7"></script>
+  <script src="/supabase-client.js?v=17"></script>
+  <script src="/app.js?v=17"></script>
 </body>
 </html>
 
