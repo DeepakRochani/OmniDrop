@@ -1972,12 +1972,30 @@
 
       // Direct-to-Disk streaming for large files (enables 50GB, 150GB+ without RAM limits)
       let fileStream = null;
+      let opfsFileHandle = null;
       if (window.showSaveFilePicker && currentTransfer.files.length === 1 && currentTransfer.totalSize > 25 * 1024 * 1024) {
         try {
           const handle = await window.showSaveFilePicker({ suggestedName: currentTransfer.files[0].name });
           fileStream = await handle.createWritable();
         } catch (e) {
-          // User dismissed picker or not supported; falls back smoothly to in-memory chunks
+          // User dismissed picker or not supported; falls back to OPFS or in-memory chunks
+        }
+      }
+
+      // Origin Private File System (OPFS) disk streaming fallback for Mobile Chrome / Android / Desktop without showSaveFilePicker
+      if (!fileStream && currentTransfer.files.length === 1 && currentTransfer.totalSize > 10 * 1024 * 1024 && navigator.storage && navigator.storage.getDirectory) {
+        try {
+          const root = await navigator.storage.getDirectory();
+          const safeOpfsName = 'omnidrop_' + Date.now() + '_' + (currentTransfer.files[0].name || 'file').replace(/[^\w.\-]/g, '_');
+          opfsFileHandle = await root.getFileHandle(safeOpfsName, { create: true });
+          if (typeof opfsFileHandle.createWritable === 'function') {
+            fileStream = await opfsFileHandle.createWritable();
+          } else {
+            opfsFileHandle = null;
+          }
+        } catch (e) {
+          opfsFileHandle = null;
+          fileStream = null;
         }
       }
 
@@ -2018,6 +2036,7 @@
         fileBlobParts: [],
         receivedBlobs: [],
         fileStream: fileStream,
+        opfsFileHandle: opfsFileHandle,
         fileStreamWritePromise: Promise.resolve(),
         fileStreamClosingPromise: null,
         startTime: Date.now()
@@ -2710,17 +2729,42 @@
     if (!receiving) return;
     if (receiving.fileStream) {
       const streamToClose = receiving.fileStream;
+      const opfsHandle = receiving.opfsFileHandle;
       const pendingWrite = receiving.fileStreamWritePromise || Promise.resolve();
+      const fileName = receiving.currentFileName;
+      const fileMime = receiving.currentFileType;
+      const fileSize = receiving.currentFileSize;
       receiving.fileStream = null;
-      receiving.fileStreamClosingPromise = pendingWrite
-        .then(() => streamToClose.close())
-        .catch(() => {});
-      receiving.receivedBlobs.push({
-        name: receiving.currentFileName,
-        size: receiving.currentFileSize,
-        directSaved: true
-      });
-      showToast(`✅ Saved ${receiving.currentFileName} directly to chosen folder!`);
+      receiving.opfsFileHandle = null;
+
+      if (opfsHandle) {
+        receiving.fileStreamClosingPromise = pendingWrite
+          .then(() => streamToClose.close())
+          .then(() => opfsHandle.getFile())
+          .then((diskFile) => {
+            const blobUrl = URL.createObjectURL(diskFile);
+            receiving.receivedBlobs.push({
+              name: fileName,
+              mimeType: fileMime,
+              blob: diskFile,
+              downloadUrl: blobUrl,
+              size: diskFile.size || fileSize
+            });
+          })
+          .catch((err) => {
+            console.warn('[OPFS] Finalize error:', err);
+          });
+      } else {
+        receiving.fileStreamClosingPromise = pendingWrite
+          .then(() => streamToClose.close())
+          .catch(() => {});
+        receiving.receivedBlobs.push({
+          name: fileName,
+          size: fileSize,
+          directSaved: true
+        });
+        showToast(`✅ Saved ${fileName} directly to chosen folder!`);
+      }
     } else if (receiving.fileBlobParts && receiving.fileBlobParts.length > 0) {
       const blob = new Blob(receiving.fileBlobParts, { type: 'application/octet-stream' });
       const blobUrl = URL.createObjectURL(blob);
