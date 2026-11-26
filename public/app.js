@@ -477,13 +477,19 @@
   }
 
   // --- Worldwide WebRTC P2P Configuration & State ---
-  const RTC_CONFIG = {
+  const STUN_ONLY_RTC_CONFIG = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
       { urls: 'stun:stun3.l.google.com:19302' },
-      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:stun.cloudflare.com:3478' }
+    ]
+  };
+
+  const RTC_CONFIG = {
+    iceServers: [
+      ...STUN_ONLY_RTC_CONFIG.iceServers,
       {
         urls: [
           'turn:openrelay.metered.ca:80',
@@ -2532,7 +2538,9 @@
       }
     }
 
-    const pc = new RTCPeerConnection(RTC_CONFIG);
+    const isSameNetwork = (myInfo.ip && peer?.ip && isIpMatch(myInfo.ip, peer.ip))
+      || (myInfo.localLanIp && peer?.localLanIp && isIpMatch(myInfo.localLanIp, peer.localLanIp));
+    const pc = new RTCPeerConnection(isSameNetwork ? STUN_ONLY_RTC_CONFIG : RTC_CONFIG);
     const conn = {
       pc,
       dc: null,
