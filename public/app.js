@@ -2953,7 +2953,7 @@
     if (!openDc) {
       document.getElementById('progress-title').textContent = 'Establishing Direct P2P...';
       document.getElementById('progress-speed').textContent = 'Connecting...';
-      const deadline = Date.now() + 3500;
+      const deadline = Date.now() + 6000;
       while (!openDc && !outgoing.cancelRequested && Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 100));
         openDc = findOpenChannel();
@@ -2976,7 +2976,7 @@
   async function streamFilesOverSupabase(outgoing) {
     const { transferId, targetPeer, files, fileMetaList, totalSize } = outgoing;
     const progressModal = document.getElementById('modal-progress');
-    document.getElementById('progress-title').textContent = 'Streaming Files...';
+    document.getElementById('progress-title').textContent = 'Streaming (Relay Fallback)...';
     document.getElementById('progress-target').textContent = `Transferring to ${targetPeer.name}`;
 
     const chunkSize = 32 * 1024; // 32 KB per chunk (safe for Supabase Realtime broadcast limits)
