@@ -2925,26 +2925,50 @@
     }
   }
 
-  // Unified outgoing transfer starter to guarantee streaming starts exactly once
-  function startOutgoingTransferStream(outgoing) {
+  // Unified outgoing transfer starter: wait briefly for WebRTC DataChannel to open before falling back to Supabase
+  async function startOutgoingTransferStream(outgoing) {
     if (!outgoing || outgoing.streamingStarted) return;
     outgoing.streamingStarted = true;
 
-    // 1. Check if outgoing already has an open DataChannel
-    if (outgoing.dc && (outgoing.dc.readyState === 'open' || outgoing.dc.open)) {
+    const findOpenChannel = () => {
+      if (outgoing.dc && (outgoing.dc.readyState === 'open' || outgoing.dc.open)) {
+        return outgoing.dc;
+      }
+      const p = outgoing.targetPeer;
+      const candidates = [
+        webrtcConnections.get(p?.id),
+        p?.peerId ? webrtcConnections.get(p.peerId) : null,
+        p?.pin ? webrtcConnections.get(p.pin) : null,
+        p?.pin ? webrtcConnections.get('od_' + p.pin) : null
+      ];
+      for (const conn of candidates) {
+        if (conn && conn.dc && (conn.dc.readyState === 'open' || conn.dc.open)) {
+          return conn.dc;
+        }
+      }
+      return null;
+    };
+
+    let openDc = findOpenChannel();
+    if (!openDc) {
+      document.getElementById('progress-title').textContent = 'Establishing Direct P2P...';
+      document.getElementById('progress-speed').textContent = 'Connecting...';
+      const deadline = Date.now() + 3500;
+      while (!openDc && !outgoing.cancelRequested && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 100));
+        openDc = findOpenChannel();
+      }
+    }
+
+    if (outgoing.cancelRequested) return;
+
+    if (openDc) {
+      outgoing.dc = openDc;
       streamFilesOverWebRTCDataChannel(outgoing);
       return;
     }
 
-    // 2. Check if peer connection has an active DataChannel
-    const altConn = webrtcConnections.get(outgoing.targetPeer?.id);
-    if (altConn && altConn.dc && (altConn.dc.readyState === 'open' || altConn.dc.open)) {
-      outgoing.dc = altConn.dc;
-      streamFilesOverWebRTCDataChannel(outgoing);
-      return;
-    }
-
-    // 3. Fallback to Supabase Realtime WebSocket streaming
+    // Fallback to Supabase Realtime WebSocket streaming if P2P DataChannel could not open
     streamFilesOverSupabase(outgoing);
   }
 
