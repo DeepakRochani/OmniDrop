@@ -1,12 +1,12 @@
-const CACHE_NAME = 'omnidrop-cache-v22';
+const CACHE_NAME = 'omnidrop-cache-v23';
 const ASSETS = [
   '/',
   '/index.html',
-  '/style.css?v=22',
-  '/app.js?v=22',
+  '/style.css?v=23',
+  '/app.js?v=23',
   '/qrcode.js',
   '/peerjs.min.js',
-  '/supabase-client.js?v=22',
+  '/supabase-client.js?v=23',
   '/ads.txt',
   '/manifest.json',
   '/icon.svg'
@@ -119,7 +119,7 @@ self.addEventListener('fetch', event => {
         .then(response => {
           if (response && response.ok) {
             const copy = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy)).catch(() => {});
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy)).catch(() => { });
           }
           return response;
         })

@@ -1870,12 +1870,14 @@
       document.getElementById('progress-title').textContent = 'Sending Files...';
       document.getElementById('progress-target').textContent = `Transferring to ${targetPeer.name}`;
 
+      let uploadedBefore = 0;
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         document.getElementById('progress-filename').textContent = `${file.name} (${i + 1}/${files.length})`;
 
         const uploadUrl = `/api/transfer/upload/${transferId}/${i}`;
-        await uploadFileWithProgress(uploadUrl, file, transferId, i, totalSize);
+        await uploadFileWithProgress(uploadUrl, file, transferId, i, totalSize, uploadedBefore);
+        uploadedBefore += file.size;
       }
 
       // Done
@@ -1892,7 +1894,7 @@
   }
 
   // Upload single file binary stream with XHR for accurate upload progress
-  function uploadFileWithProgress(url, file, transferId, fileIndex, grandTotal) {
+  function uploadFileWithProgress(url, file, transferId, fileIndex, grandTotal, uploadedBefore = 0) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url, true);
@@ -1917,7 +1919,8 @@
             lastLoaded = e.loaded;
           }
 
-          const percent = Math.round((e.loaded / e.total) * 100);
+          const totalBasis = grandTotal > 0 ? grandTotal : e.total;
+          const percent = totalBasis > 0 ? Math.min(100, Math.round(((uploadedBefore + e.loaded) / totalBasis) * 100)) : 100;
           document.getElementById('progress-percentage').textContent = `${percent}%`;
 
           // Update SVG ring offset (circumference = 2 * PI * 50 = 314)
@@ -2043,7 +2046,7 @@
         receivedBlobs: [],
         fileStream: fileStream,
         opfsFileHandle: opfsFileHandle,
-        fileStreamWritePromise: Promise.resolve(),
+        fileStreamWritePromise: fileStream ? Promise.resolve() : null,
         fileStreamClosingPromise: null,
         startTime: Date.now()
       };
@@ -2699,6 +2702,31 @@
           currentWebRTCReceiving.currentFileType = msg.fileType || 'application/octet-stream';
           currentWebRTCReceiving.receivedFileBytes = 0;
           currentWebRTCReceiving.fileBlobParts = [];
+          if (!currentWebRTCReceiving.fileStream && !currentWebRTCReceiving.opfsFileHandle) {
+            currentWebRTCReceiving.fileStreamWritePromise = null;
+          }
+
+          // For multi-file batches (>10 MB total or >5 MB file), stream each file to OPFS disk instead of RAM
+          if (!currentWebRTCReceiving.fileStream && !currentWebRTCReceiving.opfsFileHandle
+            && (currentWebRTCReceiving.totalSize > 10 * 1024 * 1024 || msg.fileSize > 5 * 1024 * 1024)
+            && navigator.storage && navigator.storage.getDirectory) {
+            const targetReceiving = currentWebRTCReceiving;
+            const safeOpfsName = 'omnidrop_' + Date.now() + '_' + msg.fileIndex + '_' + (msg.fileName || 'file').replace(/[^\w.\-]/g, '_');
+            targetReceiving.fileStreamWritePromise = navigator.storage.getDirectory()
+              .then(root => root.getFileHandle(safeOpfsName, { create: true }))
+              .then(handle => {
+                if (typeof handle.createWritable !== 'function') return null;
+                targetReceiving.opfsFileHandle = handle;
+                return handle.createWritable();
+              })
+              .then(writable => {
+                if (writable) targetReceiving.fileStream = writable;
+              })
+              .catch(() => {
+                targetReceiving.opfsFileHandle = null;
+                targetReceiving.fileStream = null;
+              });
+          }
 
           document.getElementById('progress-title').textContent = 'Receiving Worldwide (P2P)...';
           document.getElementById('progress-target').textContent = `From ${peer.name}`;
@@ -2734,22 +2762,25 @@
 
   // Finalize a single WebRTC received file into receivedBlobs (or close direct disk stream)
   function finalizeCurrentWebRTCFile(receiving) {
-    if (!receiving) return;
-    if (receiving.fileStream) {
-      const streamToClose = receiving.fileStream;
-      const opfsHandle = receiving.opfsFileHandle;
-      const pendingWrite = receiving.fileStreamWritePromise || Promise.resolve();
-      const fileName = receiving.currentFileName;
-      const fileMime = receiving.currentFileType;
-      const fileSize = receiving.currentFileSize;
-      receiving.fileStream = null;
-      receiving.opfsFileHandle = null;
+    if (!receiving || !receiving.currentFileName) return;
+    const fileName = receiving.currentFileName;
+    const fileMime = receiving.currentFileType;
+    const fileSize = receiving.currentFileSize;
+    receiving.currentFileName = '';
 
-      if (opfsHandle) {
-        receiving.fileStreamClosingPromise = pendingWrite
-          .then(() => streamToClose.close())
-          .then(() => opfsHandle.getFile())
-          .then((diskFile) => {
+    if (receiving.fileStream || receiving.opfsFileHandle) {
+      const pendingWrite = receiving.fileStreamWritePromise || Promise.resolve();
+      const closePromise = pendingWrite
+        .then(async () => {
+          const streamToClose = receiving.fileStream;
+          const opfsHandle = receiving.opfsFileHandle;
+          receiving.fileStream = null;
+          receiving.opfsFileHandle = null;
+          if (streamToClose) {
+            await streamToClose.close();
+          }
+          if (opfsHandle) {
+            const diskFile = await opfsHandle.getFile();
             const blobUrl = URL.createObjectURL(diskFile);
             receiving.receivedBlobs.push({
               name: fileName,
@@ -2758,30 +2789,30 @@
               downloadUrl: blobUrl,
               size: diskFile.size || fileSize
             });
-          })
-          .catch((err) => {
-            console.warn('[OPFS] Finalize error:', err);
-          });
-      } else {
-        receiving.fileStreamClosingPromise = pendingWrite
-          .then(() => streamToClose.close())
-          .catch(() => {});
-        receiving.receivedBlobs.push({
-          name: fileName,
-          size: fileSize,
-          directSaved: true
+          } else {
+            receiving.receivedBlobs.push({
+              name: fileName,
+              size: fileSize,
+              directSaved: true
+            });
+            showToast(`✅ Saved ${fileName} directly to chosen folder!`);
+          }
+        })
+        .catch((err) => {
+          console.warn('[OPFS] Finalize error:', err);
         });
-        showToast(`✅ Saved ${fileName} directly to chosen folder!`);
-      }
-    } else if (receiving.fileBlobParts && receiving.fileBlobParts.length > 0) {
+      receiving.fileClosePromises = receiving.fileClosePromises || [];
+      receiving.fileClosePromises.push(closePromise);
+      receiving.fileStreamClosingPromise = Promise.all(receiving.fileClosePromises);
+    } else if (receiving.fileBlobParts) {
       const blob = new Blob(receiving.fileBlobParts, { type: 'application/octet-stream' });
       const blobUrl = URL.createObjectURL(blob);
       receiving.receivedBlobs.push({
-        name: receiving.currentFileName,
-        mimeType: receiving.currentFileType,
+        name: fileName,
+        mimeType: fileMime,
         blob: blob,
         downloadUrl: blobUrl,
-        size: receiving.currentFileSize
+        size: fileSize
       });
       receiving.fileBlobParts = [];
     }
@@ -2818,11 +2849,15 @@
   function handleWebRTCBinaryChunk(chunk) {
     if (!currentWebRTCReceiving) return;
 
-    if (currentWebRTCReceiving.fileStream) {
-      const targetStream = currentWebRTCReceiving.fileStream;
+    if (currentWebRTCReceiving.fileStream || currentWebRTCReceiving.opfsFileHandle || currentWebRTCReceiving.fileStreamWritePromise) {
       const targetReceiving = currentWebRTCReceiving;
       targetReceiving.fileStreamWritePromise = (targetReceiving.fileStreamWritePromise || Promise.resolve())
-        .then(() => targetStream.write(chunk))
+        .then(() => {
+          if (targetReceiving.fileStream) {
+            return targetReceiving.fileStream.write(chunk);
+          }
+          targetReceiving.fileBlobParts.push(chunk);
+        })
         .catch(() => {
           targetReceiving.fileBlobParts.push(chunk);
         });
