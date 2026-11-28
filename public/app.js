@@ -1775,12 +1775,24 @@
   function triggerFilePickerForPeer(peer) {
     const input = document.getElementById('global-file-input');
     input.value = '';
-    input.onchange = (e) => {
-      const files = Array.from(e.target.files);
+    let handled = false;
+    const processSelectedFiles = () => {
+      if (handled) return;
+      const files = input.files ? Array.from(input.files) : [];
       if (files.length > 0) {
-        initiateSendFiles(peer, files);
+        handled = true;
+        window.removeEventListener('focus', onPickerReturn);
+        input.value = '';
+        const latestPeer = peersMap.get(peer.id) || peer;
+        showToast(`📤 Sending ${files.length} file(s)...`);
+        initiateSendFiles(latestPeer, files);
       }
     };
+    const onPickerReturn = () => {
+      setTimeout(processSelectedFiles, 350);
+    };
+    input.onchange = processSelectedFiles;
+    window.addEventListener('focus', onPickerReturn, { once: true });
     input.click();
   }
 

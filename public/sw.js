@@ -1,12 +1,12 @@
-const CACHE_NAME = 'omnidrop-cache-v23';
+const CACHE_NAME = 'omnidrop-cache-v24';
 const ASSETS = [
   '/',
   '/index.html',
-  '/style.css?v=23',
-  '/app.js?v=23',
+  '/style.css?v=24',
+  '/app.js?v=24',
   '/qrcode.js',
   '/peerjs.min.js',
-  '/supabase-client.js?v=23',
+  '/supabase-client.js?v=24',
   '/ads.txt',
   '/manifest.json',
   '/icon.svg'
