@@ -1782,6 +1782,7 @@
       if (files.length > 0) {
         handled = true;
         window.removeEventListener('focus', onPickerReturn);
+        document.removeEventListener('visibilitychange', onVisibilityReturn);
         input.value = '';
         const latestPeer = peersMap.get(peer.id) || peer;
         showToast(`📤 Sending ${files.length} file(s)...`);
@@ -1790,9 +1791,15 @@
     };
     const onPickerReturn = () => {
       setTimeout(processSelectedFiles, 350);
+      setTimeout(processSelectedFiles, 1000);
+      setTimeout(processSelectedFiles, 2500);
+    };
+    const onVisibilityReturn = () => {
+      if (document.visibilityState === 'visible') onPickerReturn();
     };
     input.onchange = processSelectedFiles;
     window.addEventListener('focus', onPickerReturn, { once: true });
+    document.addEventListener('visibilitychange', onVisibilityReturn);
     input.click();
   }
 
@@ -1963,18 +1970,20 @@
     document.getElementById('incoming-sender-title').textContent = req.isWebRTC
       ? `${req.sender.name} (🌐 Worldwide P2P) wants to share`
       : `${req.sender.name} wants to share with you`;
+    const totalCount = req.totalFiles || req.files.length;
     document.getElementById('incoming-files-info').innerHTML = `
-      <span class="file-count">${req.files.length} File(s)</span> &bull; 
+      <span class="file-count">${totalCount} File(s)</span> &bull; 
       <span class="file-size">${req.formattedSize || formatBytes(req.totalSize || 0)}</span>
     `;
 
     const previewList = document.getElementById('incoming-file-items');
+    const extraCount = totalCount - req.files.length;
     previewList.innerHTML = req.files.map(f => `
       <div class="incoming-file-row">
         <span>${f.name}</span>
         <span style="color:var(--text-muted);">${formatBytes(f.size)}</span>
       </div>
-    `).join('');
+    `).join('') + (extraCount > 0 ? `<div class="incoming-file-row"><span style="color:var(--text-muted);">...and ${extraCount} more file(s)</span><span></span></div>` : '');
 
     document.getElementById('modal-incoming').style.display = 'flex';
   }
@@ -2047,7 +2056,7 @@
         sender: currentTransfer.sender,
         files: currentTransfer.files,
         totalSize: currentTransfer.totalSize,
-        totalFiles: currentTransfer.files.length,
+        totalFiles: currentTransfer.totalFiles || currentTransfer.files.length,
         currentFileIndex: 0,
         currentFileName: '',
         currentFileSize: 0,
@@ -2685,6 +2694,7 @@
           transferId: msg.transferId,
           sender: msg.sender || peer,
           files: msg.files,
+          totalFiles: msg.totalFiles || msg.files.length,
           totalSize: msg.totalSize,
           formattedSize: formatBytes(msg.totalSize),
           isWebRTC: true,
@@ -2954,6 +2964,9 @@
     document.getElementById('progress-filename').textContent = `${files.length} file(s) (${formatBytes(totalSize)})`;
     progressModal.style.display = 'flex';
 
+    // Cap preview metadata in TRANSFER_REQUEST at 30 items so Supabase/WebRTC never drops large multi-file handshakes
+    const requestFilesPreview = fileMetaList.length > 30 ? fileMetaList.slice(0, 30) : fileMetaList;
+
     // Send handshake request over DataChannel
     if (dc && (dc.readyState === 'open' || dc.open)) {
       try {
@@ -2961,7 +2974,8 @@
           type: 'TRANSFER_REQUEST',
           transferId,
           sender: { id: myInfo.id || myClientId, name: myInfo.name, os: myInfo.os },
-          files: fileMetaList,
+          files: requestFilesPreview,
+          totalFiles: fileMetaList.length,
           totalSize
         }));
       } catch (e) {}
@@ -2974,7 +2988,8 @@
         transferId,
         fromId: myInfo.id || myClientId,
         sender: { id: myInfo.id || myClientId, name: myInfo.name, os: myInfo.os },
-        files: fileMetaList,
+        files: requestFilesPreview,
+        totalFiles: fileMetaList.length,
         totalSize
       });
     }
