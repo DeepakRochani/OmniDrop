@@ -1718,24 +1718,12 @@
           }
         }, { passive: true });
 
-        node.addEventListener('touchend', (e) => {
+        node.addEventListener('touchend', () => {
           node.classList.remove('peer-touch-active');
-          if (!touchMoved) {
-            lastTouchTime = Date.now();
-            currentTargetPeer = peer;
-            if (pendingShareFiles && pendingShareFiles.length > 0) {
-              const files = pendingShareFiles;
-              pendingShareFiles = null;
-              initiateSendFiles(peer, files);
-              return;
-            }
-            triggerFilePickerForPeer(peer);
-          }
-        });
+        }, { passive: true });
 
-        // Click to send files or text (desktop mouse support with touch debounce)
+        // Click to send files (works reliably on iOS Chrome/Safari, Android, and Desktop)
         node.addEventListener('click', () => {
-          if (Date.now() - lastTouchTime < 500) return;
           currentTargetPeer = peer;
           if (pendingShareFiles && pendingShareFiles.length > 0) {
             const files = pendingShareFiles;
@@ -1773,31 +1761,45 @@
 
   // --- Trigger File Picker ---
   function triggerFilePickerForPeer(peer) {
-    const input = document.getElementById('global-file-input');
-    input.value = '';
+    // Use a fresh in-viewport invisible <input type="file"> for iOS Chrome/Safari WKWebView reliability
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0.001;pointer-events:none;z-index:-1;';
+    document.body.appendChild(input);
+
     let handled = false;
+    const cleanup = () => {
+      window.removeEventListener('focus', onPickerReturn);
+      document.removeEventListener('visibilitychange', onVisibilityReturn);
+      setTimeout(() => {
+        if (input.parentNode) input.parentNode.removeChild(input);
+      }, 1000);
+    };
+
     const processSelectedFiles = () => {
       if (handled) return;
       const files = input.files ? Array.from(input.files) : [];
       if (files.length > 0) {
         handled = true;
-        window.removeEventListener('focus', onPickerReturn);
-        document.removeEventListener('visibilitychange', onVisibilityReturn);
-        input.value = '';
+        cleanup();
         const latestPeer = peersMap.get(peer.id) || peer;
         showToast(`📤 Sending ${files.length} file(s)...`);
         initiateSendFiles(latestPeer, files);
       }
     };
+
     const onPickerReturn = () => {
       setTimeout(processSelectedFiles, 350);
       setTimeout(processSelectedFiles, 1000);
       setTimeout(processSelectedFiles, 2500);
+      setTimeout(() => { if (!handled) cleanup(); }, 4000);
     };
     const onVisibilityReturn = () => {
       if (document.visibilityState === 'visible') onPickerReturn();
     };
-    input.onchange = processSelectedFiles;
+
+    input.addEventListener('change', processSelectedFiles);
     window.addEventListener('focus', onPickerReturn, { once: true });
     document.addEventListener('visibilitychange', onVisibilityReturn);
     input.click();
